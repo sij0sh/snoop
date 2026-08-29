@@ -11,10 +11,13 @@ tags:
 status: draft
 generated:
   by: cheatcodes/0.2.0
-  at: 2026-08-29T18:08:12.248Z
+  at: 2026-08-29T18:39:37.032Z
 sources:
   - id: session-ef730a043d37fc6d
     resource: session:eb890f0a-d85a-40f0-9039-195582d9d43d#entries=6ba5cefb,b7ff8b25
+    title: Session evidence
+  - id: session-96fc13eeb45f83b0
+    resource: session:cf3a2158-f1ee-4cdf-b91d-4baf277db934#entries=59f23c6e
     title: Session evidence
 ---
 
@@ -53,3 +56,41 @@ src/store.rs:1308:        assert_eq!(store.delete_vectors_for_model(repo, "mock-
 
 
 [Hint: Prefer the grep tool for content search.]
+
+# Updates
+
+## Addendum
+
+### Symptom
+
+Existing vectors created in mock embedding mode are associated with the mock-v1 model rather than the configured real embedder.
+
+### Cause
+
+The mock embedder is selected with SNOOP_EMBED_URL=mock, and vector storage tracks vectors by model version, allowing mock-v1 vectors to be identified separately.
+
+### Fix
+
+When switching to a real embedder, purge the mock-v1 vectors before using real-embedding results; model-specific vector deletion is supported by the store.
+
+### Evidence
+
+- [evidence-51b5b6253bb05e8bd675425a] src/store.rs:1179:            .put_vector(unit_id, "evidence", "mock-v1", &[0.1, 0.2])
+src/store.rs:1182:            .put_vector(unit_id, "routing", "mock-v1", &[0.3, 0.4])
+src/store.rs:1196:                ("mock-v1".to_string(), 2),
+src/store.rs:1199:        assert_eq!(store.delete_vectors_for_model(repo, "mock-v1").unwrap(), 2);
+src/runtime.rs:852:        let embedder = crate::inference::MockEmbedder::new("mock-v1");
+src/runtime.rs:867:            channels: QueryChannels::for_embedder(Some(&crate::inference::MockEmbedder::new("mock-v1"))),
+src/mcp.rs:270:        let embedder = crate::inference::MockEmbedder::new("mock-v1");
+src/main.rs:132:fn embedder() -> Option<Box<dyn Embedder>> {
+src/main.rs:133:    let Ok(url) = std::env::var("SNOOP_EMBED_URL") else {
+src/main.rs:136:    if url == "mock" {
+src/inference.rs:75:pub const MOCK_MODEL_VERSION: &str = "mock-v1";
+src/main.rs:132:fn embedder() -> Option<Box<dyn Embedder>> {
+src/main.rs:133:    let Ok(url) = std::env::var("SNOOP_EMBED_URL") else {
+src/main.rs:136:    if url == "mock" {
+---
+146:fn cli_ensure_refreshes_then_reports_up_to_date() {
+147-    let directory = tempfile::tempdir().unwrap();
+148-    let repo = directory.path()
+[truncated]
