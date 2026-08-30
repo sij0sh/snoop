@@ -2,7 +2,7 @@
 
 `snoop` is a local repository context compiler for coding agents.
 
-V1 indexes current code (Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java), Markdown, text, git history, and prior agent sessions (Pi). It stores canonical atoms and disposable retrieval units in SQLite. It creates deterministic evidence and routing projections. Queries run over four local channels (evidence/routing x BM25/vector) with reciprocal-rank fusion and anchor expansion. It performs no query-time generative-LLM call.
+V1 indexes current code (Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java), Markdown, text, git history, and prior agent sessions (Pi). It stores self-contained retrieval units in SQLite. It creates deterministic evidence and routing projections. Queries run over four local channels (evidence/routing x BM25/vector) with reciprocal-rank fusion and anchor expansion. It performs no query-time generative-LLM call.
 
 ## Build and test
 
@@ -28,6 +28,8 @@ snoop sessions refresh_session
 ```
 
 The default database is `.snoop.db`. Set `SNOOP_DB` or pass `--db` to override it.
+
+Queries emit lean packets: each item carries only source kind, locator, evidence text, and timestamp. `snoop query --explain` additionally prints selection diagnostics to stderr (selected unit IDs, source slices, resolved anchors, selection reasons, channel and fused rankings, anchor-expansion decisions). `max_tokens` is an evidence budget: the sum of admitted evidence never exceeds it.
 
 Without a configured embedder, Snoop runs in **lexical-and-anchor mode**: evidence and routing
 BM25, anchor expansion, role-aware admission, content-hash deduplication, and token budgeting.
@@ -109,7 +111,7 @@ It exposes exactly three tools:
 
 | Tool | Input | Returns |
 |---|---|---|
-| `get_repo_context` | `query` (string, required), `max_tokens` (integer, default 6000) | Token-budgeted context packet across current code, docs, git history, and prior agent work |
+| `get_repo_context` | `query` (string, required), `max_tokens` (integer, default 6000) | Evidence-budgeted context packet across current code, docs, git history, and prior agent work |
 | `repo_symbol_context` | `symbol` (string, required) | Every unit anchored to the symbol (code, docs, commits) |
 | `repo_history` | `symbol` (string, required) | Git commit units that changed the symbol |
 
@@ -121,14 +123,14 @@ Included through V1:
 
 - gitignore-aware repository scanning.
 - Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, and Java code parsing.
-- canonical atoms with offsets, breadcrumbs, and BLAKE3 hashes.
+- in-memory atom parsing (offsets, breadcrumbs, BLAKE3 hashes) feeding retrieval units.
 - deterministic retrieval units and routing projections.
 - incremental source and unit reuse (git tip boundary, session appends).
 - git-history ingestion with diff-to-symbol alignment.
-- Pi session adapter normalizing prior agent work into phase-aware, append-stable retrieval segments (deterministic).
+- Pi session adapter normalizing prior agent work into one unit per user turn (append-stable, deterministic).
 - anchor graph and query-time anchor expansion.
 - SQLite FTS5 indexing and sqlite-vec cosine distance search (opt-in via `SNOOP_EMBED_URL`).
 - local llama.cpp embedding adapter plus a mock adapter for tests.
 - evidence-only and four-channel retrieval; lexical-and-anchor mode when no embedder is configured.
-- RRF, context budgeting, near-duplicate filtering, role-aware packet assembly, and explanations.
+- RRF, evidence budgeting, near-duplicate filtering, role-aware packet assembly, and opt-in explain diagnostics.
 - stdio MCP server with three tools.
