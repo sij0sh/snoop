@@ -129,6 +129,7 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 4_000,
+            diagnostics: true,
         },
     )
     .unwrap();
@@ -144,13 +145,15 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
         "code hit present: {kinds:?}"
     );
     assert!(
-        report.packet.items.iter().any(|item| item
+        report.debug.as_ref().unwrap().items.iter().any(|item| item
             .selected_because
             .iter()
             .any(|reason| matches!(reason, snoop::core::SelectionReason::AnchorExpansion(..)))),
         "at least one item selected via anchor expansion: {:?}",
         report
-            .packet
+            .debug
+            .as_ref()
+            .unwrap()
             .items
             .iter()
             .map(|item| &item.selected_because)
@@ -159,6 +162,8 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
     assert!(
         report
             .debug
+            .as_ref()
+            .unwrap()
             .expansion
             .iter()
             .any(|entry| entry.accepted && entry.anchor_kind == "symbol"),
@@ -168,12 +173,14 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
         .packet
         .items
         .iter()
-        .filter(|item| {
-            item.selected_because
+        .zip(report.debug.as_ref().unwrap().items.iter())
+        .filter(|(_, diagnostics)| {
+            diagnostics
+                .selected_because
                 .iter()
                 .any(|reason| matches!(reason, snoop::core::SelectionReason::AnchorExpansion(..)))
         })
-        .map(|item| item.source_kind)
+        .map(|(item, _)| item.source_kind)
         .collect();
     assert!(
         expanded_kinds
@@ -191,6 +198,7 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 4_000,
+            diagnostics: false,
         },
     )
     .unwrap();

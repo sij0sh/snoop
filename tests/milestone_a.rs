@@ -80,16 +80,20 @@ fn indexes_incrementally_and_queries_four_channels() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 2_000,
+            diagnostics: true,
         },
     )
     .unwrap();
-    assert!(!dual.debug.evidence_lexical.is_empty());
-    assert!(!dual.debug.evidence_vector.is_empty());
-    assert!(!dual.debug.routing_lexical.is_empty());
-    assert!(!dual.debug.routing_vector.is_empty());
+    let dual_debug = dual.debug.as_ref().unwrap();
+    assert!(!dual_debug.evidence_lexical.is_empty());
+    assert!(!dual_debug.evidence_vector.is_empty());
+    assert!(!dual_debug.routing_lexical.is_empty());
+    assert!(!dual_debug.routing_vector.is_empty());
     assert!(dual.packet.token_count <= 2_000);
     assert!(dual
-        .packet
+        .debug
+        .as_ref()
+        .unwrap()
         .items
         .iter()
         .all(|item| !item.source_slices.is_empty()));
@@ -107,6 +111,7 @@ fn indexes_incrementally_and_queries_four_channels() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 2_000,
+            diagnostics: false,
         },
     )
     .unwrap();
@@ -164,6 +169,7 @@ fn deterministic_routing_changes_the_top_one_on_a_vocabulary_fixture() {
         channels,
         top_n: 10,
         max_tokens: 180,
+        diagnostics: true,
     };
     let baseline = query(
         &store,
@@ -189,7 +195,8 @@ fn deterministic_routing_changes_the_top_one_on_a_vocabulary_fixture() {
         .evidence_text
         .contains("refresh_session"));
     assert_ne!(
-        baseline.packet.items[0].unit_id, dual.packet.items[0].unit_id,
+        baseline.debug.as_ref().unwrap().items[0].unit_id,
+        dual.debug.as_ref().unwrap().items[0].unit_id,
         "the fixture must demonstrate routing lift at rank 1"
     );
 }

@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::core::{ContextItem, ContextPacket, RepoId, SelectionReason};
+use crate::core::{
+    ContextItem, ContextPacket, ItemDiagnostics, RepoId, RetrievalUnit, SelectionReason, UnitId,
+};
 use crate::inference::Embedder;
 use crate::store::{cosine, Store};
 
@@ -65,6 +67,7 @@ pub struct QueryOptions {
     pub channels: QueryChannels,
     pub top_n: usize,
     pub max_tokens: usize,
+    pub diagnostics: bool,
 }
 
 impl Default for QueryOptions {
@@ -73,10 +76,10 @@ impl Default for QueryOptions {
             channels: QueryChannels::for_embedder(None),
             top_n: 25,
             max_tokens: 6_000,
+            diagnostics: false,
         }
     }
 }
-
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DebugReport {
     pub evidence_lexical: Vec<(i64, f64)>,
@@ -85,6 +88,7 @@ pub struct DebugReport {
     pub routing_vector: Vec<(i64, f32)>,
     pub fused: Vec<(i64, f64, u32)>,
     pub expansion: Vec<ExpansionDebug>,
+    pub items: Vec<ItemDiagnostics>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -100,7 +104,7 @@ pub struct ExpansionDebug {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QueryReport {
     pub packet: ContextPacket,
-    pub debug: DebugReport,
+    pub debug: Option<DebugReport>,
 }
 
 pub fn rrf_fuse(channels: &[Vec<i64>], k: u64) -> Vec<(i64, f64, u32)> {
@@ -133,6 +137,20 @@ fn rank_of(channel: &[i64], id: i64) -> Option<u32> {
         .iter()
         .position(|candidate| *candidate == id)
         .map(|position| position as u32 + 1)
+}
+
+/// Load a unit once per query; ranking, admission, and rendering share it.
+fn cached_unit(
+    store: &Store,
+    cache: &mut HashMap<i64, Option<RetrievalUnit>>,
+    id: i64,
+) -> Result<Option<RetrievalUnit>, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(cached) = cache.get(&id) {
+        return Ok(cached.clone());
+    }
+    let unit = store.unit_by_id(id)?;
+    cache.insert(id, unit.clone());
+    Ok(unit)
 }
 
 /// Oversampled candidate pool for the role-aware builders.
@@ -204,9 +222,11 @@ pub fn query(
     let fused = rrf_fuse(&enabled, RRF_K);
 
     let mut items = Vec::new();
+    let mut item_diagnostics: Vec<ItemDiagnostics> = Vec::new();
     let mut seen_hashes: HashSet<String> = HashSet::new();
+    let mut unit_cache: HashMap<i64, Option<RetrievalUnit>> = HashMap::new();
 
-    let expansion = plan_expansion(store, repo_id, &fused, text)?;
+    let expansion = plan_expansion(store, repo_id, &fused, text, options.diagnostics)?;
     let selection_order = expansion.selection_order;
     let expansion_debug = expansion.debug;
 
@@ -221,7 +241,7 @@ pub fn query(
     let facets = detect_facets(text);
     let mut pool_with_kinds: Vec<(i64, u32, crate::core::SourceKind)> = Vec::new();
     for (id, rank) in &pool {
-        if let Some(unit) = store.unit_by_id(*id)? {
+        if let Some(unit) = cached_unit(store, &mut unit_cache, *id)? {
             pool_with_kinds.push((*id, *rank, unit.source_kind));
         }
     }
@@ -245,11 +265,12 @@ pub fn query(
         role_assignments: &mut HashMap<i64, (String, bool)>,
         seen_hashes: &mut HashSet<String>,
         used_tokens: &mut usize,
+        unit_cache: &mut HashMap<i64, Option<RetrievalUnit>>,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         if admitted.contains(&id) {
             return Ok(false);
         }
-        let Some(unit) = store.unit_by_id(id)? else {
+        let Some(unit) = cached_unit(store, unit_cache, id)? else {
             return Ok(false);
         };
         if !seen_hashes.insert(unit.content_hash.clone()) {
@@ -277,7 +298,9 @@ pub fn query(
                 role_vectors.entry(role).or_default().push(vector);
             }
         }
-        role_assignments.insert(id, (role.to_string(), required));
+        if options.diagnostics {
+            role_assignments.insert(id, (role.to_string(), required));
+        }
         admitted.push(id);
         *used_tokens += unit.token_count;
         Ok(true)
@@ -302,6 +325,7 @@ pub fn query(
                 &mut role_assignments,
                 &mut seen_hashes,
                 &mut used_tokens,
+                &mut unit_cache,
             )? {
                 break;
             }
@@ -334,6 +358,7 @@ pub fn query(
                 &mut role_assignments,
                 &mut seen_hashes,
                 &mut used_tokens,
+                &mut unit_cache,
             )? {
                 break;
             }
@@ -358,21 +383,36 @@ pub fn query(
             &mut role_assignments,
             &mut seen_hashes,
             &mut used_tokens,
+            &mut unit_cache,
         )?;
     }
     accepted_ids.extend(admitted);
 
-    let reason_map: HashMap<i64, (Option<u32>, Option<Vec<SelectionReason>>)> = selection_order
-        .iter()
-        .map(|(id, _, rank, reasons)| (*id, (*rank, reasons.clone())))
-        .collect();
+    let reason_map: HashMap<i64, (Option<u32>, Option<Vec<SelectionReason>>)> =
+        if options.diagnostics {
+            selection_order
+                .iter()
+                .map(|(id, _, rank, reasons)| (*id, (*rank, reasons.clone())))
+                .collect()
+        } else {
+            HashMap::new()
+        };
 
     for unit_id in &accepted_ids {
-        let (fused_rank, expansion_reasons) =
-            reason_map.get(unit_id).cloned().unwrap_or((None, None));
-        let Some(unit) = store.unit_by_id(*unit_id)? else {
+        let Some(unit) = cached_unit(store, &mut unit_cache, *unit_id)? else {
             continue;
         };
+        items.push(ContextItem {
+            source_kind: unit.source_kind,
+            evidence_text: unit.evidence_text.clone(),
+            source_locator: unit.locator.clone(),
+            timestamp: unit.timestamp,
+        });
+        if !options.diagnostics {
+            continue;
+        }
+        let (fused_rank, expansion_reasons) =
+            reason_map.get(unit_id).cloned().unwrap_or((None, None));
         let mut reasons = Vec::new();
         if let Some(rank) = rank_of(&evidence_lexical_ids, *unit_id) {
             reasons.push(SelectionReason::EvidenceLexicalRank(rank));
@@ -395,48 +435,16 @@ pub fn query(
         if let Some((role, required)) = role_assignments.get(unit_id) {
             reasons.push(SelectionReason::RoleAware(role.clone(), *required));
         }
-        let anchors = store
-            .anchors_for_unit(*unit_id)?
-            .into_iter()
-            .map(|anchor| {
-                format!(
-                    "{}:{}:{}",
-                    anchor.kind.as_str(),
-                    anchor.value,
-                    anchor.relationship
-                )
-            })
-            .collect::<Vec<String>>();
-        items.push(ContextItem {
-            unit_id: unit.id,
-            source_kind: unit.source_kind,
-            evidence_text: unit.evidence_text,
-            source_locator: unit.locator,
+        item_diagnostics.push(ItemDiagnostics {
+            unit_id: UnitId(*unit_id),
             source_slices: unit.metadata["source_slices"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default(),
-            anchors,
-            timestamp: unit.timestamp,
+            anchors: store.anchors_for_unit(*unit_id)?,
             selected_because: reasons,
         });
     }
-
-    fn group_of(kind: crate::core::SourceKind) -> u8 {
-        match kind {
-            crate::core::SourceKind::Code => 0,
-            crate::core::SourceKind::Markdown | crate::core::SourceKind::Text => 1,
-            crate::core::SourceKind::GitCommit => 2,
-            crate::core::SourceKind::AgentSession => 3,
-        }
-    }
-    let mut indexed: Vec<(usize, ContextItem)> = items.into_iter().enumerate().collect();
-    indexed.sort_by(|a, b| {
-        group_of(a.1.source_kind)
-            .cmp(&group_of(b.1.source_kind))
-            .then(a.0.cmp(&b.0))
-    });
-    let items: Vec<ContextItem> = indexed.into_iter().map(|(_, item)| item).collect();
 
     Ok(QueryReport {
         packet: ContextPacket {
@@ -445,13 +453,18 @@ pub fn query(
             token_count: used_tokens,
             budget: options.max_tokens,
         },
-        debug: DebugReport {
-            evidence_lexical,
-            evidence_vector,
-            routing_lexical,
-            routing_vector,
-            fused,
-            expansion: expansion_debug,
+        debug: if options.diagnostics {
+            Some(DebugReport {
+                evidence_lexical,
+                evidence_vector,
+                routing_lexical,
+                routing_vector,
+                fused,
+                expansion: expansion_debug,
+                items: item_diagnostics,
+            })
+        } else {
+            None
         },
     })
 }

@@ -415,6 +415,8 @@ fn classify_miss(
     let gold_in_lexical = gold_flat.iter().any(|id| lexical.contains(id));
     let gold_in_fused = report
         .debug
+        .as_ref()
+        .expect("bench queries run with diagnostics")
         .fused
         .iter()
         .any(|(id, _, _)| gold_flat.contains(id));
@@ -438,6 +440,8 @@ fn run_config(
         channels: config.channels,
         top_n: 10,
         max_tokens: 2_000,
+        // Scoring keys on unit ids and fused ranks, which live in diagnostics.
+        diagnostics: true,
     };
     let mut result = ConfigResult::default();
     for class in CLASSES {
@@ -448,8 +452,8 @@ fn run_config(
         let start = Instant::now();
         let report = query(store, repo, Some(embedder), question.query, &options).unwrap();
         let elapsed = start.elapsed().as_secs_f64() * 1_000.0;
-        let packet_ids: Vec<i64> = report
-            .packet
+        let diagnostics = report.debug.as_ref().expect("bench diagnostics");
+        let packet_ids: Vec<i64> = diagnostics
             .items
             .iter()
             .map(|item| item.unit_id.0)
@@ -465,8 +469,7 @@ fn run_config(
             .filter(|item| is_distractor(&item.source_locator))
             .count();
         let precision = 1.0 - (distractor_items as f64 / packet_ids.len().max(1) as f64);
-        let gold_tokens: usize = report
-            .packet
+        let gold_tokens: usize = diagnostics
             .items
             .iter()
             .filter(|item| gold_flat.contains(&item.unit_id.0))

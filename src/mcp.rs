@@ -64,7 +64,7 @@ fn tool_definitions() -> serde_json::Value {
                     "query": {"type": "string", "description": "Natural-language question"},
                     "max_tokens": {
                         "type": "integer",
-                        "description": "Token budget for the packet (default 6000)",
+                        "description": "Evidence token budget: the sum of admitted evidence never exceeds it (default 6000)",
                         "default": DEFAULT_MAX_TOKENS
                     }
                 },

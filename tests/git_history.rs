@@ -138,6 +138,7 @@ fn git_history_indexes_symbol_units_and_falls_back() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 2_000,
+            diagnostics: false,
         },
     )
     .unwrap();

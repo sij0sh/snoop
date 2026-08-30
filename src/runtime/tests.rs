@@ -120,6 +120,8 @@ fn options_all() -> QueryOptions {
         channels: QueryChannels::for_embedder(None),
         top_n: 25,
         max_tokens: 6_000,
+        // Debug fields are inspected by these tests.
+        diagnostics: true,
     }
 }
 
@@ -181,7 +183,9 @@ fn lexical_mode_runs_without_an_embedder_and_dedups_by_content_hash() {
     };
     let report = query(&store, repo, None, "alpha", &options).unwrap();
     let ids: Vec<i64> = report
-        .packet
+        .debug
+        .as_ref()
+        .unwrap()
         .items
         .iter()
         .map(|item| item.unit_id.0)
@@ -192,7 +196,8 @@ fn lexical_mode_runs_without_an_embedder_and_dedups_by_content_hash() {
         "identical content is deduplicated without vectors: {ids:?}"
     );
     assert!(
-        report.debug.evidence_vector.is_empty() && report.debug.routing_vector.is_empty(),
+        report.debug.as_ref().unwrap().evidence_vector.is_empty()
+            && report.debug.as_ref().unwrap().routing_vector.is_empty(),
         "lexical mode runs no vector channels"
     );
 }
@@ -224,7 +229,9 @@ fn budget_skips_oversized_candidate_and_admits_smaller_ones() {
     };
     let report = query(&store, repo, None, "auth", &options).unwrap();
     let packet_ids: Vec<i64> = report
-        .packet
+        .debug
+        .as_ref()
+        .unwrap()
         .items
         .iter()
         .map(|item| item.unit_id.0)
@@ -292,7 +299,9 @@ fn required_role_admission_respects_the_budget() {
     )
     .unwrap();
     let packet_ids: Vec<i64> = report
-        .packet
+        .debug
+        .as_ref()
+        .unwrap()
         .items
         .iter()
         .map(|item| item.unit_id.0)

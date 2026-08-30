@@ -306,6 +306,13 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         kinds.contains(&"AgentSession"),
         "prior agent work via MCP: {kinds:?}"
     );
+    let first_item = &packet["items"][0];
+    for field in ["unit_id", "source_slices", "anchors", "selected_because"] {
+        assert!(
+            first_item.get(field).is_none(),
+            "MCP packets stay lean: {field}"
+        );
+    }
 
     let history = &responses[3];
     let history_entries: serde_json::Value =

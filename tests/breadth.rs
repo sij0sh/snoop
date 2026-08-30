@@ -67,6 +67,7 @@ fn code_symbols_are_retrievable_across_languages() {
                 channels: QueryChannels::for_embedder(Some(&embedder)),
                 top_n: 25,
                 max_tokens: 6_000,
+                diagnostics: false,
             },
         )
         .unwrap();

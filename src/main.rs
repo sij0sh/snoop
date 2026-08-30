@@ -304,10 +304,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     channels,
                     top_n: top,
                     max_tokens: tokens,
+                    diagnostics: explain,
                 },
             )?;
-            if explain {
-                eprintln!("{}", serde_json::to_string_pretty(&report.debug)?);
+            if let Some(debug) = &report.debug {
+                eprintln!("{}", serde_json::to_string_pretty(debug)?);
             }
             println!("{}", serde_json::to_string_pretty(&report.packet)?);
         }

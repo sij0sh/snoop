@@ -260,15 +260,21 @@ pub enum SelectionReason {
     RoleAware(String, bool),
 }
 
+/// Lean item rendered into every packet: no provenance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextItem {
-    pub unit_id: UnitId,
     pub source_kind: SourceKind,
     pub evidence_text: String,
     pub source_locator: String,
-    pub source_slices: Vec<Value>,
-    pub anchors: Vec<String>,
     pub timestamp: Option<i64>,
+}
+
+/// Per-item provenance, built only for explain requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemDiagnostics {
+    pub unit_id: UnitId,
+    pub source_slices: Vec<Value>,
+    pub anchors: Vec<ResolvedAnchor>,
     pub selected_because: Vec<SelectionReason>,
 }
 

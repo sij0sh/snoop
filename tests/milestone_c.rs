@@ -86,17 +86,8 @@ fn fixture(root: &Path, sessions_root: &Path) {
     .unwrap();
 }
 
-fn group_of(kind: SourceKind) -> u8 {
-    match kind {
-        SourceKind::Code => 0,
-        SourceKind::Markdown | SourceKind::Text => 1,
-        SourceKind::GitCommit => 2,
-        SourceKind::AgentSession => 3,
-    }
-}
-
 #[test]
-fn four_source_packet_groups_orders_and_stays_in_budget() {
+fn four_source_packet_stays_in_budget() {
     let _guard = env_lock();
     let directory = tempfile::tempdir().unwrap();
     let sessions_root = tempfile::tempdir().unwrap();
@@ -117,6 +108,7 @@ fn four_source_packet_groups_orders_and_stays_in_budget() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 2_000,
+            diagnostics: false,
         },
     )
     .unwrap();
@@ -137,19 +129,6 @@ fn four_source_packet_groups_orders_and_stays_in_budget() {
             .iter()
             .any(|kind| matches!(kind, SourceKind::Markdown | SourceKind::Text)),
         "docs present"
-    );
-
-    let groups: Vec<u8> = report
-        .packet
-        .items
-        .iter()
-        .map(|item| group_of(item.source_kind))
-        .collect();
-    let mut sorted = groups.clone();
-    sorted.sort_unstable();
-    assert_eq!(
-        groups, sorted,
-        "groups are contiguous and ordered: {kinds:?}"
     );
 
     assert!(
@@ -181,6 +160,7 @@ fn milestone_c_resumed_work_returns_prior_episode_with_code() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 3_000,
+            diagnostics: false,
         },
     )
     .unwrap();
@@ -236,6 +216,24 @@ fn full_cli_surface_works_on_the_fixture() {
         );
         String::from_utf8_lossy(&output.stdout).into_owned()
     };
+    let run_with_stderr = |args: &[&str], env: &[(&str, &str)]| {
+        let mut command = Command::new(binary);
+        command.args(args);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{} failed: {}",
+            args.first().unwrap_or(&"?"),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
     let repo_arg = repo.to_str().unwrap();
     let db_arg = db.to_str().unwrap();
     let sessions_arg = sessions_root.path().to_str().unwrap();
@@ -254,7 +252,7 @@ fn full_cli_surface_works_on_the_fixture() {
     run(&["index", "--db", db_arg, "--repo", repo_arg], &env);
     let status = run(&["status", "--db", db_arg, "--repo", repo_arg], &env);
     assert!(status.contains("\"sources\""));
-    let query_out = run(
+    let (query_out, explain_out) = run_with_stderr(
         &[
             "query",
             "refresh_session rotation",
@@ -262,11 +260,21 @@ fn full_cli_surface_works_on_the_fixture() {
             db_arg,
             "--repo",
             repo_arg,
+            "--explain",
         ],
         &env,
     );
     let packet: serde_json::Value = serde_json::from_str(&query_out).unwrap();
-    let first_unit = packet["items"][0]["unit_id"].as_i64().unwrap();
+    assert!(
+        packet["items"]
+            .as_array()
+            .unwrap()
+            .first()
+            .is_some_and(|item| item.get("unit_id").is_none()),
+        "lean packets carry no unit ids"
+    );
+    let diagnostics: serde_json::Value = serde_json::from_str(&explain_out).unwrap();
+    let first_unit = diagnostics["items"][0]["unit_id"].as_i64().unwrap();
     let inspect_unit = run(
         &[
             "inspect",

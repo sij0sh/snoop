@@ -154,17 +154,23 @@ fn sessions_table_populated_and_query_returns_agent_evidence() {
             channels: QueryChannels::for_embedder(Some(&embedder)),
             top_n: 10,
             max_tokens: 4_000,
+            diagnostics: true,
         },
     )
     .unwrap();
-    let agent_items: Vec<_> = report
+    let diagnostics = report
+        .debug
+        .as_ref()
+        .expect("session anchors come from diagnostics");
+    let agent: Vec<_> = report
         .packet
         .items
         .iter()
-        .filter(|item| item.source_kind == SourceKind::AgentSession)
+        .zip(diagnostics.items.iter())
+        .filter(|(item, _)| item.source_kind == SourceKind::AgentSession)
         .collect();
     assert!(
-        !agent_items.is_empty(),
+        !agent.is_empty(),
         "query returns prior-agent evidence, kinds: {:?}",
         report
             .packet
@@ -173,15 +179,15 @@ fn sessions_table_populated_and_query_returns_agent_evidence() {
             .map(|item| item.source_kind)
             .collect::<Vec<_>>()
     );
-    let agent_item = agent_items[0];
+    let (_, agent_item) = agent[0];
     assert!(agent_item
         .anchors
         .iter()
-        .any(|anchor| anchor.starts_with("session:")));
+        .any(|anchor| anchor.kind == snoop::core::AnchorKind::Session));
     assert!(agent_item
         .anchors
         .iter()
-        .any(|anchor| anchor.contains("src/auth.rs")));
+        .any(|anchor| anchor.value.contains("src/auth.rs")));
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
 }

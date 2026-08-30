@@ -25,6 +25,7 @@ pub(crate) fn plan_expansion(
     repo_id: RepoId,
     fused: &[(i64, f64, u32)],
     query_text: &str,
+    diagnostics: bool,
 ) -> Result<ExpansionPlan, Box<dyn std::error::Error + Send + Sync>> {
     let seed_ids: Vec<i64> = fused
         .iter()
@@ -84,17 +85,19 @@ pub(crate) fn plan_expansion(
                     score += SOURCE_DIVERSITY_BONUS;
                 }
                 candidate_scores.insert(candidate, score);
-                candidate_reasons.entry(candidate).or_default().push(
-                    SelectionReason::AnchorExpansion(kind.to_string(), value.to_string(), seed),
-                );
-                expansion_debug.push(ExpansionDebug {
-                    seed_unit: seed,
-                    anchor_kind: kind.to_string(),
-                    anchor_value: value.to_string(),
-                    candidate,
-                    expanded_score: score,
-                    accepted: false,
-                });
+                if diagnostics {
+                    candidate_reasons.entry(candidate).or_default().push(
+                        SelectionReason::AnchorExpansion(kind.to_string(), value.to_string(), seed),
+                    );
+                    expansion_debug.push(ExpansionDebug {
+                        seed_unit: seed,
+                        anchor_kind: kind.to_string(),
+                        anchor_value: value.to_string(),
+                        candidate,
+                        expanded_score: score,
+                        accepted: false,
+                    });
+                }
             }
         }
     }
@@ -136,11 +139,13 @@ pub(crate) fn plan_expansion(
     for (id, score, reasons) in pure_expansions {
         selection_order.push((id, score, None, Some(reasons)));
     }
-    for debug in expansion_debug.iter_mut() {
-        debug.accepted = accepted.contains(&debug.candidate)
-            && selection_order
-                .iter()
-                .any(|(id, _, _, _)| *id == debug.candidate);
+    if diagnostics {
+        for debug in expansion_debug.iter_mut() {
+            debug.accepted = accepted.contains(&debug.candidate)
+                && selection_order
+                    .iter()
+                    .any(|(id, _, _, _)| *id == debug.candidate);
+        }
     }
     Ok(ExpansionPlan {
         selection_order,
