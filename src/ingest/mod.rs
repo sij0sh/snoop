@@ -9,8 +9,9 @@ pub mod units;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::core::{Repository, SourceKind};
+use crate::core::{BuiltUnit, Repository, SourceKind};
 use crate::inference::Embedder;
+use crate::metadata;
 use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 
 pub const INDEX_FORMAT_VERSION: &str = "phase-13-v1";
@@ -61,6 +62,73 @@ impl std::error::Error for LockedError {}
 
 fn deadline_passed(deadline: Option<std::time::Instant>) -> bool {
     deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline)
+}
+
+/// One pending source handed from a family loop to the ingest protocol.
+struct SourceCandidate {
+    kind: SourceKind,
+    locator: String,
+    content_hash: String,
+    modified_at: Option<i64>,
+}
+
+/// Family-owned payload for a candidate that passed the skip and deadline
+/// checks.
+struct Produced {
+    metadata: serde_json::Value,
+    units: Vec<BuiltUnit>,
+}
+
+/// Whether the calling family loop should keep iterating.
+enum Step {
+    Next,
+    DeadlineReached,
+}
+
+/// The single owner of the incremental-ingest protocol for one candidate:
+/// unchanged-skip, deadline bail, commit, and outcome tally. `produce` runs
+/// only after both checks pass; returning `Ok(None)` skips the candidate
+/// (for example an undecodable source) without tallying a commit. New
+/// source families become candidate producers and must not restate this
+/// protocol (guarded by tests/architecture.rs).
+fn ingest_candidate(
+    store: &mut Store,
+    candidate: SourceCandidate,
+    force_rebuild: bool,
+    deadline: Option<std::time::Instant>,
+    outcome: &mut IndexOutcome,
+    produce: impl FnOnce(
+        &mut IndexOutcome,
+    ) -> Result<Option<Produced>, Box<dyn std::error::Error + Send + Sync>>,
+) -> Result<Step, Box<dyn std::error::Error + Send + Sync>> {
+    if !force_rebuild
+        && store
+            .source_by_locator(&candidate.locator)?
+            .is_some_and(|existing| existing.content_hash == candidate.content_hash)
+    {
+        outcome.unchanged_sources += 1;
+        return Ok(Step::Next);
+    }
+    if deadline_passed(deadline) {
+        outcome.timed_out = true;
+        return Ok(Step::DeadlineReached);
+    }
+    let Some(produced) = produce(outcome)? else {
+        return Ok(Step::Next);
+    };
+    let committed = store.commit_source(SourceIngest {
+        kind: candidate.kind,
+        locator: &candidate.locator,
+        content_hash: &candidate.content_hash,
+        modified_at: candidate.modified_at,
+        metadata: produced.metadata,
+        units: &produced.units,
+    })?;
+    outcome.changed_sources += 1;
+    outcome.units_added += committed.units_added;
+    outcome.units_reused += committed.units_reused;
+    outcome.units_removed += committed.units_removed;
+    Ok(Step::Next)
 }
 
 pub fn index_repository_bounded(
@@ -135,7 +203,7 @@ fn index_repository_body(
     let mut outcome = IndexOutcome::default();
 
     if git::is_history_root(&root) {
-        let stored_tip = repository.metadata["git_tip"].as_str().map(String::from);
+        let stored_tip = metadata::git_tip::read(&repository.metadata).map(String::from);
         let commits = match (!force_rebuild).then_some(stored_tip.as_deref()).flatten() {
             Some(tip) => git::list_commits_past(&root, git::MAX_COMMITS, tip)?,
             None => git::list_commits(&root, git::MAX_COMMITS)?,
@@ -147,31 +215,27 @@ fn index_repository_body(
         for commit in commits {
             let locator = format!("git:{}", commit.oid);
             present.insert(locator.clone());
-            if !force_rebuild
-                && store
-                    .source_by_locator(&locator)?
-                    .is_some_and(|existing| existing.content_hash == commit.content_hash)
-            {
-                outcome.unchanged_sources += 1;
-                continue;
-            }
-            if deadline_passed(deadline) {
-                outcome.timed_out = true;
+            let step = ingest_candidate(
+                store,
+                SourceCandidate {
+                    kind: SourceKind::GitCommit,
+                    locator: locator.clone(),
+                    content_hash: commit.content_hash.clone(),
+                    modified_at: Some(commit.timestamp),
+                },
+                force_rebuild,
+                deadline,
+                &mut outcome,
+                |_| {
+                    Ok(Some(Produced {
+                        metadata: serde_json::json!({"commit": commit.oid.clone()}),
+                        units: git::ingest_commit(&root, &commit)?,
+                    }))
+                },
+            )?;
+            if matches!(step, Step::DeadlineReached) {
                 break;
             }
-            let units = git::ingest_commit(&root, &commit)?;
-            let committed = store.commit_source(SourceIngest {
-                kind: SourceKind::GitCommit,
-                locator: &locator,
-                content_hash: &commit.content_hash,
-                modified_at: Some(commit.timestamp),
-                metadata: serde_json::json!({"commit": commit.oid}),
-                units: &units,
-            })?;
-            outcome.changed_sources += 1;
-            outcome.units_added += committed.units_added;
-            outcome.units_reused += committed.units_reused;
-            outcome.units_removed += committed.units_removed;
         }
 
         if let Some(newest) = newest_tip {
@@ -194,104 +258,99 @@ fn index_repository_body(
                 continue;
             }
             let content_hash = blake3::hash(&bytes).to_hex().to_string();
-            if !force_rebuild
-                && store
-                    .source_by_locator(&locator)?
-                    .is_some_and(|existing| existing.content_hash == content_hash)
-            {
-                outcome.unchanged_sources += 1;
-                continue;
-            }
-            if deadline_passed(deadline) {
-                outcome.timed_out = true;
+            let step = ingest_candidate(
+                store,
+                SourceCandidate {
+                    kind: SourceKind::AgentSession,
+                    locator: locator.clone(),
+                    content_hash,
+                    modified_at: None,
+                },
+                force_rebuild,
+                deadline,
+                &mut outcome,
+                |_| {
+                    let content = String::from_utf8_lossy(&bytes).into_owned();
+                    Ok(Some(Produced {
+                        metadata: serde_json::json!({"session": session.session_id.clone()}),
+                        units: harness::ingest_pi_session(&content, &session.session_id)?,
+                    }))
+                },
+            )?;
+            if matches!(step, Step::DeadlineReached) {
                 break;
             }
-            let content = String::from_utf8_lossy(&bytes).into_owned();
-            let units = harness::ingest_pi_session(&content, &session.session_id)?;
-            let committed = store.commit_source(SourceIngest {
-                kind: SourceKind::AgentSession,
-                locator: &locator,
-                content_hash: &content_hash,
-                modified_at: None,
-                metadata: serde_json::json!({"session": session.session_id}),
-                units: &units,
-            })?;
-            outcome.changed_sources += 1;
-            outcome.units_added += committed.units_added;
-            outcome.units_reused += committed.units_reused;
-            outcome.units_removed += committed.units_removed;
         }
     }
 
-    for source in scanned {
+    for source in &scanned {
         if outcome.timed_out {
             break;
         }
-        if !force_rebuild
-            && store
-                .source_by_locator(&source.locator)?
-                .is_some_and(|existing| existing.content_hash == source.content_hash)
-        {
-            outcome.unchanged_sources += 1;
-            continue;
-        }
-        if deadline_passed(deadline) {
-            outcome.timed_out = true;
+        let step = ingest_candidate(
+            store,
+            SourceCandidate {
+                kind: source.kind,
+                locator: source.locator.clone(),
+                content_hash: source.content_hash.clone(),
+                modified_at: source.modified_at,
+            },
+            force_rebuild,
+            deadline,
+            &mut outcome,
+            |outcome| {
+                let bytes = std::fs::read(&source.path)?;
+                if bytes.len() as u64 > scanner::MAX_SOURCE_BYTES {
+                    return Err(format!(
+                        "source grew beyond size limit during scan: {}",
+                        source.locator
+                    )
+                    .into());
+                }
+                let read_hash = blake3::hash(&bytes).to_hex().to_string();
+                if read_hash != source.content_hash {
+                    return Err(
+                        format!("source changed during indexing: {}", source.locator).into(),
+                    );
+                }
+                // An undecodable source is skipped, not run-fatal (correction
+                // C4). If the source was committed earlier while still
+                // decodable, its stale committed version keeps serving: the
+                // locator stays in the scanned set, so delete_sources_not_in
+                // preserves it while the skip prevents refresh. Skips
+                // re-attempt cheaply and idempotently every run; no
+                // U+FFFD-poisoned units or fake anchors are ever committed.
+                let content = match String::from_utf8(bytes) {
+                    Ok(content) => content,
+                    Err(_) => {
+                        eprintln!(
+                            "warning: skipped source that is not valid UTF-8: {}",
+                            source.locator
+                        );
+                        outcome.skipped_sources += 1;
+                        return Ok(None);
+                    }
+                };
+                let title = source
+                    .path
+                    .file_stem()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|| source.locator.clone());
+                let atoms = match source.kind {
+                    SourceKind::Markdown => markdown::parse_markdown(&content, &title).atoms,
+                    SourceKind::Text => text::parse_text(&content, &title),
+                    SourceKind::Code => code::parse_code(&content, &source.locator)?,
+                    SourceKind::GitCommit | SourceKind::AgentSession => unreachable!(),
+                };
+                Ok(Some(Produced {
+                    metadata: serde_json::json!({"path": source.locator.clone()}),
+                    units: units::build_units(&atoms, source.kind, &source.locator),
+                }))
+            },
+        )?;
+        if matches!(step, Step::DeadlineReached) {
             break;
         }
-        let bytes = std::fs::read(&source.path)?;
-        if bytes.len() as u64 > scanner::MAX_SOURCE_BYTES {
-            return Err(format!(
-                "source grew beyond size limit during scan: {}",
-                source.locator
-            )
-            .into());
-        }
-        let read_hash = blake3::hash(&bytes).to_hex().to_string();
-        if read_hash != source.content_hash {
-            return Err(format!("source changed during indexing: {}", source.locator).into());
-        }
-        // An undecodable source is skipped, not run-fatal (correction C4). If the
-        // source was committed earlier while still decodable, its stale committed
-        // version keeps serving: the locator stays in the scanned set, so
-        // delete_sources_not_in preserves it while the skip prevents refresh.
-        // Skips re-attempt cheaply and idempotently every run; no
-        // U+FFFD-poisoned units or fake anchors are ever committed.
-        let content = match String::from_utf8(bytes) {
-            Ok(content) => content,
-            Err(_) => {
-                eprintln!(
-                    "warning: skipped source that is not valid UTF-8: {}",
-                    source.locator
-                );
-                outcome.skipped_sources += 1;
-                continue;
-            }
-        };
-        let title = source
-            .path
-            .file_stem()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_else(|| source.locator.clone());
-        let atoms = match source.kind {
-            SourceKind::Markdown => markdown::parse_markdown(&content, &title).atoms,
-            SourceKind::Text => text::parse_text(&content, &title),
-            SourceKind::Code => code::parse_code(&content, &source.locator)?,
-            SourceKind::GitCommit | SourceKind::AgentSession => unreachable!(),
-        };
-        let built = units::build_units(&atoms, source.kind, &source.locator);
-        let committed = store.commit_source(SourceIngest {
-            kind: source.kind,
-            locator: &source.locator,
-            content_hash: &source.content_hash,
-            modified_at: source.modified_at,
-            metadata: serde_json::json!({"path": source.locator}),
-            units: &built,
-        })?;
-        outcome.changed_sources += 1;
-        outcome.units_added += committed.units_added;
-        outcome.units_reused += committed.units_reused;
-        outcome.units_removed += committed.units_removed;
     }
 
     // The format version advances only after the complete source rebuild
