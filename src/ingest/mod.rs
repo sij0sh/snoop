@@ -1,3 +1,4 @@
+pub mod backfill;
 pub mod code;
 pub mod git;
 pub mod harness;
@@ -382,29 +383,61 @@ pub fn index_embeddings(
     deadline: Option<std::time::Instant>,
     lease_owner: &str,
 ) -> Result<(usize, bool), Box<dyn std::error::Error + Send + Sync>> {
+    // Machine-wide admission (audit fix-c4): every repo's backfill contends
+    // for the same embed endpoint, so exactly one backfill per machine runs
+    // at a time. A waiter whose budget expires reports a clean timeout.
+    let _guard = match backfill::acquire_backfill_lock(deadline) {
+        Ok(guard) => Some(guard),
+        Err(error) if error.is::<backfill::BudgetExhausted>() => {
+            backfill::log_event(
+                "embed-busy",
+                serde_json::json!({"reason": "backfill lock wait exceeded budget"}),
+            );
+            return Ok((0, true));
+        }
+        Err(error) => return Err(error),
+    };
     let mut embedded = 0;
     for kind in ["evidence", "routing"] {
-        let missing = store.units_missing_vectors(kind, embedder.model_version())?;
-        if missing.is_empty() {
-            continue;
-        }
-        for chunk in missing.chunks(EMBED_CHUNK_LEN) {
+        // Keyset pagination (audit fix-c6): hold one chunk of pending texts in
+        // memory, never the whole backlog. An earlier writer that vectorizes a
+        // unit mid-run simply removes it from a later page; unreachable under
+        // the lease, and deferred to the next ensure otherwise.
+        let mut after_id = 0;
+        loop {
+            let page = store.units_missing_vectors_page(
+                kind,
+                embedder.model_version(),
+                after_id,
+                EMBED_CHUNK_LEN,
+            )?;
+            if page.is_empty() {
+                break;
+            }
             if deadline_passed(deadline) {
                 return Ok((embedded, true));
             }
             if !store.renew_lease(lease_owner, INDEX_LEASE_TTL_SECS)? {
                 return Err("index lease lost during embedding".into());
             }
-            let texts: Vec<String> = chunk.iter().map(|(_, text)| text.clone()).collect();
-            let vectors = embedder.embed_documents(&texts)?;
-            if vectors.len() != chunk.len() {
+            let texts: Vec<String> = page.iter().map(|(_, text)| text.clone()).collect();
+            let vectors = match backfill::embed_batch_bounded(embedder, &texts, deadline) {
+                Ok(vectors) => vectors,
+                Err(error) if error.is::<backfill::BudgetExhausted>() => {
+                    return Ok((embedded, true));
+                }
+                Err(error) => return Err(error),
+            };
+            if vectors.len() != page.len() {
                 return Err("embedder returned the wrong vector count".into());
             }
-            for ((unit_id, _), vector) in chunk.iter().zip(vectors) {
+            for ((unit_id, _), vector) in page.iter().zip(vectors) {
                 store.put_vector(*unit_id, kind, embedder.model_version(), &vector)?;
                 embedded += 1;
             }
+            after_id = page.last().expect("non-empty page").0;
         }
     }
+    backfill::log_event("done", serde_json::json!({"embedded": embedded}));
     Ok((embedded, false))
 }

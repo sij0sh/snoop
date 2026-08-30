@@ -3,10 +3,46 @@ use std::time::Duration;
 
 pub type EmbedResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+/// Classified embed failure. Transport faults, timeouts, and 5xx/429/408
+/// responses are transient; other HTTP client errors and payload mismatches
+/// are permanent and are never retried.
+#[derive(Debug)]
+pub enum EmbedError {
+    Transient(String),
+    Permanent(String),
+}
+
+impl std::fmt::Display for EmbedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transient(message) | Self::Permanent(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for EmbedError {}
+
+impl EmbedError {
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Transient(_))
+    }
+}
+
 pub trait Embedder: Send + Sync {
     fn model_version(&self) -> &str;
     fn embed_query(&self, text: &str) -> EmbedResult<Vec<f32>>;
     fn embed_documents(&self, texts: &[String]) -> EmbedResult<Vec<Vec<f32>>>;
+    /// Same as `embed_documents`, but every HTTP batch must finish inside
+    /// `timeout`. Implementations that cannot bound a batch may ignore the
+    /// timeout; the server-side embedder (llama.cpp) honors it.
+    fn embed_documents_bounded(
+        &self,
+        texts: &[String],
+        timeout: Duration,
+    ) -> EmbedResult<Vec<Vec<f32>>> {
+        let _ = timeout;
+        self.embed_documents(texts)
+    }
 }
 
 pub struct LlamaServerEmbedder {
@@ -24,11 +60,20 @@ impl LlamaServerEmbedder {
         }
     }
 
-    fn request(&self, texts: &[String]) -> EmbedResult<Vec<Vec<f32>>> {
+    fn request(&self, texts: &[String], timeout: Duration) -> EmbedResult<Vec<Vec<f32>>> {
         let response = ureq::post(&format!("{}/v1/embeddings", self.base_url))
-            .timeout(Duration::from_secs(300))
+            .timeout(timeout)
             .send_json(serde_json::json!({"input": texts, "model": "embed"}))
-            .map_err(|error| format!("embeddings request failed: {error}"))?;
+            .map_err(|error| match error {
+                // 4xx client errors other than 408/429 will not improve on
+                // retry; transport faults and server-side pressure will.
+                ureq::Error::Status(code, _)
+                    if (400..500).contains(&code) && code != 408 && code != 429 =>
+                {
+                    EmbedError::Permanent(format!("embeddings request failed: {error}"))
+                }
+                _ => EmbedError::Transient(format!("embeddings request failed: {error}")),
+            })?;
         #[derive(serde::Deserialize)]
         struct Reply {
             data: Vec<Item>,
@@ -39,13 +84,13 @@ impl LlamaServerEmbedder {
         }
         let reply: Reply = response
             .into_json()
-            .map_err(|error| format!("embeddings decode failed: {error}"))?;
+            .map_err(|error| EmbedError::Permanent(format!("embeddings decode failed: {error}")))?;
         if reply.data.len() != texts.len() {
-            return Err(format!(
+            return Err(EmbedError::Permanent(format!(
                 "embeddings count mismatch: sent {} got {}",
                 texts.len(),
                 reply.data.len()
-            )
+            ))
             .into());
         }
         Ok(reply.data.into_iter().map(|item| item.embedding).collect())
@@ -58,15 +103,23 @@ impl Embedder for LlamaServerEmbedder {
     }
 
     fn embed_query(&self, text: &str) -> EmbedResult<Vec<f32>> {
-        self.request(&[text.to_string()])?
+        self.request(&[text.to_string()], Duration::from_secs(300))?
             .pop()
             .ok_or_else(|| "embedding server returned no vector".into())
     }
 
     fn embed_documents(&self, texts: &[String]) -> EmbedResult<Vec<Vec<f32>>> {
+        self.embed_documents_bounded(texts, Duration::from_secs(300))
+    }
+
+    fn embed_documents_bounded(
+        &self,
+        texts: &[String],
+        timeout: Duration,
+    ) -> EmbedResult<Vec<Vec<f32>>> {
         let mut output = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(self.batch.max(1)) {
-            output.extend(self.request(chunk)?);
+            output.extend(self.request(chunk, timeout)?);
         }
         Ok(output)
     }

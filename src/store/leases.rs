@@ -171,7 +171,7 @@ fn index_embeddings_renews_each_embed_request_and_aborts_on_lease_loss() {
     }
     assert_eq!(
         store
-            .units_missing_vectors("evidence", "delay-v2")
+            .units_missing_vectors_page("evidence", "delay-v2", 0, 128)
             .unwrap()
             .len(),
         100,

@@ -360,7 +360,9 @@ fn reused_unit_with_changed_routing_text_loses_stale_routing_vectors() {
             .is_some(),
         "unchanged evidence text keeps its vector"
     );
-    let missing = store.units_missing_vectors("routing", "m1").unwrap();
+    let missing = store
+        .units_missing_vectors_page("routing", "m1", 0, 32)
+        .unwrap();
     assert_eq!(
         missing,
         vec![(unit_id, "fresh routing text".to_string())],
@@ -379,7 +381,7 @@ fn reused_unit_with_changed_routing_text_loses_stale_routing_vectors() {
         "an unchanged routing text never deletes vectors"
     );
     assert!(store
-        .units_missing_vectors("routing", "m1")
+        .units_missing_vectors_page("routing", "m1", 0, 32)
         .unwrap()
         .is_empty());
 }
@@ -507,4 +509,27 @@ fn locked_refusal_is_typed_writes_no_run_row_and_keeps_holder() {
     );
     let (owner, _) = super::leases::lease_row(&store).unwrap();
     assert_eq!(owner, "blocker", "the holder's lease is untouched");
+}
+
+#[test]
+fn dense_reuse_relocates_rows_through_the_id_map() {
+    // Audit finding 4 (run 20260830195149-6f1a96a5): reused rows relocate
+    // via an id map; row lookups per commit == U_reused (was a linear scan
+    // per reused unit, exact U(U+1)/2 dense scans).
+    // Budget (advisory, machine-dependent): dense rewrite wall <= miss wall
+    // at U = 16384 (~0.9 s).
+    let mut store = Store::open_in_memory().unwrap();
+    store.bind_repository("/repo").unwrap();
+    let units: Vec<BuiltUnit> = (0..600)
+        .map(|i| unit(UnitKind::Code, &format!("unit-{i}"), Vec::new()))
+        .collect();
+    let first = commit_units(&mut store, "src/dense.rs", &units);
+    assert_eq!(first.units_added, 600);
+    let again = commit_units(&mut store, "src/dense.rs", &units);
+    assert_eq!(again.units_added, 0);
+    assert_eq!(
+        again.units_reused, 600,
+        "dense rewrite relocates every row through the id map"
+    );
+    assert_eq!(again.units_removed, 0);
 }

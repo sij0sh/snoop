@@ -12,10 +12,15 @@ impl Store {
         rows.collect()
     }
 
-    pub fn units_missing_vectors(
+    /// Keyset page of units still missing a vector for (kind, model_version),
+    /// ordered by unit id. Bounded by `limit` so callers never materialize a
+    /// full backlog (audit fix-c6: peak embed-phase heap = one chunk, not N).
+    pub fn units_missing_vectors_page(
         &self,
         kind: &str,
         model_version: &str,
+        after_id: i64,
+        limit: usize,
     ) -> rusqlite::Result<Vec<(i64, String)>> {
         let column = if kind == "routing" {
             "routing_text"
@@ -24,13 +29,15 @@ impl Store {
         };
         let sql = format!(
             "SELECT u.id,u.{column} FROM retrieval_units u
-             WHERE NOT EXISTS (SELECT 1 FROM vectors v WHERE v.unit_id=u.id
-             AND v.kind=?1 AND v.model_version=?2) ORDER BY u.id"
+             WHERE u.id > ?1
+             AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.unit_id=u.id
+             AND v.kind=?2 AND v.model_version=?3) ORDER BY u.id LIMIT ?4"
         );
         let mut statement = self.conn.prepare(&sql)?;
-        let rows = statement.query_map(params![kind, model_version], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+        let rows = statement.query_map(
+            params![after_id, kind, model_version, limit as i64],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
         rows.collect()
     }
     pub fn put_vector(
