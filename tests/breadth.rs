@@ -13,7 +13,7 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
-fn python_and_typescript_symbols_are_retrievable() {
+fn code_symbols_are_retrievable_across_languages() {
     let _guard = env_lock();
     let directory = tempfile::tempdir().unwrap();
     let sessions_root = tempfile::tempdir().unwrap();
@@ -28,6 +28,21 @@ fn python_and_typescript_symbols_are_retrievable() {
         "export function loadSession(id: string): Session {\n  return fetch(id);\n}\n",
     )
     .unwrap();
+    std::fs::write(
+        directory.path().join("src/auth.js"),
+        "export function rotate_session() {\n  return token;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("src/store.go"),
+        "package store\n\nfunc Save_item() {\n\tflush()\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("src/Auth.java"),
+        "class Auth {\n  void load_session() {\n    verify();\n  }\n}\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(sessions_root.path().join("empty")).unwrap();
     std::env::set_var("SNOOP_SESSIONS_ROOT", sessions_root.path());
 
@@ -36,53 +51,40 @@ fn python_and_typescript_symbols_are_retrievable() {
     let outcome =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
-    let report = query(
-        &store,
-        outcome.repo_id,
-        Some(&embedder),
-        "rotate_token",
-        &QueryOptions {
-            channels: QueryChannels::for_embedder(Some(&embedder)),
-            top_n: 25,
-            max_tokens: 6_000,
-        },
-    )
-    .unwrap();
-    assert!(
-        report
-            .packet
-            .items
-            .iter()
-            .any(|item| item.source_locator == "src/auth.py"),
-        "python symbol must be retrievable: {:?}",
-        report
-            .packet
-            .items
-            .iter()
-            .map(|item| &item.source_locator)
-            .collect::<Vec<_>>()
-    );
-
-    let ts_report = query(
-        &store,
-        outcome.repo_id,
-        Some(&embedder),
-        "loadSession",
-        &QueryOptions {
-            channels: QueryChannels::for_embedder(Some(&embedder)),
-            top_n: 25,
-            max_tokens: 6_000,
-        },
-    )
-    .unwrap();
-    assert!(
-        ts_report
-            .packet
-            .items
-            .iter()
-            .any(|item| item.source_locator == "src/store.ts"),
-        "typescript symbol must be retrievable"
-    );
+    for (symbol, locator) in [
+        ("rotate_token", "src/auth.py"),
+        ("loadSession", "src/store.ts"),
+        ("rotate_session", "src/auth.js"),
+        ("Save_item", "src/store.go"),
+        ("load_session", "src/Auth.java"),
+    ] {
+        let report = query(
+            &store,
+            outcome.repo_id,
+            Some(&embedder),
+            symbol,
+            &QueryOptions {
+                channels: QueryChannels::for_embedder(Some(&embedder)),
+                top_n: 25,
+                max_tokens: 6_000,
+            },
+        )
+        .unwrap();
+        assert!(
+            report
+                .packet
+                .items
+                .iter()
+                .any(|item| item.source_locator == locator),
+            "{symbol} must be retrievable from {locator}: {:?}",
+            report
+                .packet
+                .items
+                .iter()
+                .map(|item| &item.source_locator)
+                .collect::<Vec<_>>()
+        );
+    }
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
 }

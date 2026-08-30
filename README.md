@@ -2,7 +2,7 @@
 
 `snoop` is a local repository context compiler for coding agents.
 
-V1 indexes current code (Rust, Python, TypeScript/TSX), Markdown, text, git history, and prior agent sessions (Pi). It stores canonical atoms and disposable retrieval units in SQLite. It creates deterministic evidence and routing projections. Queries run over four local channels (evidence/routing x BM25/vector) with reciprocal-rank fusion and anchor expansion. It performs no query-time generative-LLM call.
+V1 indexes current code (Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java), Markdown, text, git history, and prior agent sessions (Pi). It stores canonical atoms and disposable retrieval units in SQLite. It creates deterministic evidence and routing projections. Queries run over four local channels (evidence/routing x BM25/vector) with reciprocal-rank fusion and anchor expansion. It performs no query-time generative-LLM call.
 
 ## Build and test
 
@@ -120,7 +120,7 @@ Notifications produce no response. Unknown methods return JSON-RPC `-32601` and 
 Included through V1:
 
 - gitignore-aware repository scanning.
-- Rust, Python, and TypeScript/TSX code parsing.
+- Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, and Java code parsing.
 - canonical atoms with offsets, breadcrumbs, and BLAKE3 hashes.
 - deterministic retrieval units and routing projections.
 - incremental source and unit reuse (git tip boundary, session appends).
