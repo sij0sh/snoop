@@ -136,35 +136,43 @@ CREATE TABLE unit_anchors (
 );
 
 INSERT INTO unit_anchors(unit_id, anchor_id, relationship)
-    SELECT old.unit_id, file_anchor.id, old.relationship
+    SELECT old.unit_id, a.id, old.relationship
     FROM unit_anchors_v1 old
     JOIN files file_anchor
       ON file_anchor.id = old.anchor_id
      AND file_anchor.repo_id = (SELECT u.repo_id FROM retrieval_units u WHERE u.id = old.unit_id)
+    JOIN anchors a
+      ON a.repo_id = file_anchor.repo_id AND a.kind = 'file' AND a.value = file_anchor.path
     WHERE old.anchor_kind = 'file';
 
 INSERT INTO unit_anchors(unit_id, anchor_id, relationship)
-    SELECT old.unit_id, symbol_anchor.id, old.relationship
+    SELECT old.unit_id, a.id, old.relationship
     FROM unit_anchors_v1 old
     JOIN symbols symbol_anchor
       ON symbol_anchor.id = old.anchor_id
      AND symbol_anchor.repo_id = (SELECT u.repo_id FROM retrieval_units u WHERE u.id = old.unit_id)
+    JOIN anchors a
+      ON a.repo_id = symbol_anchor.repo_id AND a.kind = 'symbol' AND a.value = symbol_anchor.name
     WHERE old.anchor_kind = 'symbol';
 
 INSERT INTO unit_anchors(unit_id, anchor_id, relationship)
-    SELECT old.unit_id, commit_anchor.id, old.relationship
+    SELECT old.unit_id, a.id, old.relationship
     FROM unit_anchors_v1 old
     JOIN commits commit_anchor
       ON commit_anchor.id = old.anchor_id
      AND commit_anchor.repo_id = (SELECT u.repo_id FROM retrieval_units u WHERE u.id = old.unit_id)
+    JOIN anchors a
+      ON a.repo_id = commit_anchor.repo_id AND a.kind = 'commit' AND a.value = commit_anchor.oid
     WHERE old.anchor_kind = 'commit';
 
 INSERT INTO unit_anchors(unit_id, anchor_id, relationship)
-    SELECT old.unit_id, session_anchor.id, old.relationship
+    SELECT old.unit_id, a.id, old.relationship
     FROM unit_anchors_v1 old
     JOIN sessions session_anchor
       ON session_anchor.id = old.anchor_id
      AND session_anchor.repo_id = (SELECT u.repo_id FROM retrieval_units u WHERE u.id = old.unit_id)
+    JOIN anchors a
+      ON a.repo_id = session_anchor.repo_id AND a.kind = 'session' AND a.value = session_anchor.session_id
     WHERE old.anchor_kind = 'session';
 
 CREATE INDEX unit_anchors_by_anchor ON unit_anchors(anchor_id);
