@@ -72,7 +72,6 @@ fn code_symbols_are_retrievable_across_languages() {
     ] {
         let report = query(
             &store,
-            outcome.repo_id,
             Some(&embedder),
             symbol,
             &QueryOptions {

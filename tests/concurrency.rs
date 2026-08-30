@@ -207,8 +207,8 @@ fn ensure_steals_an_expired_lease_row() {
         .to_string();
     {
         let store = Store::open(&db).unwrap();
-        let repository = store.ensure_repository(&root).unwrap();
-        assert!(store.acquire_lease(repository.id, "blocker", 1).unwrap());
+        let repository = store.bind_repository(&root).unwrap();
+        assert!(store.acquire_lease("blocker", 1).unwrap());
     } // holder is gone; only the expired lease row remains
 
     std::thread::sleep(EXPIRY_SLEEP);
@@ -234,8 +234,8 @@ fn ensure_steals_a_live_holders_expired_lease() {
         .to_string_lossy()
         .to_string();
     let store = Store::open(&db).unwrap();
-    let repository = store.ensure_repository(&root).unwrap();
-    assert!(store.acquire_lease(repository.id, "holder", 1).unwrap());
+    let repository = store.bind_repository(&root).unwrap();
+    assert!(store.acquire_lease("holder", 1).unwrap());
     // The holder process stays alive, but its lease lapses: past the TTL even
     // a live holder loses the lease (within the TTL it would be `locked`, as
     // pinned in tests/cli.rs). Production closes this with per-batch renewal.

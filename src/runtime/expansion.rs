@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ExpansionDebug;
-use crate::core::{RepoId, SelectionReason};
+use crate::core::SelectionReason;
 use crate::store::Store;
 
 pub(crate) const EXPANSION_SEEDS: usize = 5;
@@ -22,7 +22,6 @@ pub(crate) struct ExpansionPlan {
 
 pub(crate) fn plan_expansion(
     store: &Store,
-    repo_id: RepoId,
     fused: &[(i64, f64, u32)],
     query_text: &str,
     diagnostics: bool,
@@ -50,8 +49,7 @@ pub(crate) fn plan_expansion(
         for anchor in store.anchors_for_unit(seed)? {
             let kind = anchor.kind.as_str();
             let value = anchor.value.as_str();
-            let connected =
-                store.units_for_anchor(repo_id, kind, value, EXPANSION_CANDIDATES_PER_ANCHOR)?;
+            let connected = store.units_for_anchor(kind, value, EXPANSION_CANDIDATES_PER_ANCHOR)?;
             for candidate in connected {
                 if candidate == seed {
                     continue;

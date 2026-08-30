@@ -73,7 +73,7 @@ fn anchors_are_emitted_for_every_source_kind() {
 
     let mut kinds = std::collections::HashSet::new();
     let mut anchor_seen = false;
-    for id in store.unit_ids(outcome.repo_id).unwrap() {
+    for id in store.unit_ids().unwrap() {
         for anchor in store.anchors_for_unit(id).unwrap() {
             kinds.insert(anchor.kind);
             assert!(
@@ -100,7 +100,7 @@ fn anchors_are_emitted_for_every_source_kind() {
     );
 
     let doc_mentions_symbol = store
-        .units_for_anchor(outcome.repo_id, "symbol", "refresh_session", 32)
+        .units_for_anchor("symbol", "refresh_session", 32)
         .unwrap();
     assert!(
         doc_mentions_symbol.iter().any(|id| store
@@ -122,7 +122,6 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
 
     let report = query(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         "refresh_session",
         &QueryOptions {
@@ -191,7 +190,6 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
 
     let why = query(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         "why does refresh session validate before rotation",
         &QueryOptions {

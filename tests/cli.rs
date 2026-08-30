@@ -18,13 +18,7 @@ fn cli_runs_init_index_status_and_query() {
     for args in [
         vec!["init", repo.to_str().unwrap(), "--db", db.to_str().unwrap()],
         vec!["index", "--db", db.to_str().unwrap()],
-        vec![
-            "status",
-            "--db",
-            db.to_str().unwrap(),
-            "--repo",
-            repo.to_str().unwrap(),
-        ],
+        vec!["status", "--db", db.to_str().unwrap()],
     ] {
         let output = Command::new(binary)
             .args(args)
@@ -44,8 +38,6 @@ fn cli_runs_init_index_status_and_query() {
             "session token",
             "--db",
             db.to_str().unwrap(),
-            "--repo",
-            repo.to_str().unwrap(),
             "--explain",
         ])
         .env("SNOOP_EMBED_URL", "mock")
@@ -107,13 +99,7 @@ fn cli_defaults_to_lexical_mode_without_an_embedder() {
     }
 
     let output = Command::new(binary)
-        .args([
-            "status",
-            "--db",
-            db.to_str().unwrap(),
-            "--repo",
-            repo.to_str().unwrap(),
-        ])
+        .args(["status", "--db", db.to_str().unwrap()])
         .env_remove("SNOOP_EMBED_URL")
         .output()
         .unwrap();
@@ -133,8 +119,6 @@ fn cli_defaults_to_lexical_mode_without_an_embedder() {
             "session token",
             "--db",
             db.to_str().unwrap(),
-            "--repo",
-            repo.to_str().unwrap(),
             "--explain",
         ])
         .env_remove("SNOOP_EMBED_URL")
@@ -189,11 +173,11 @@ fn index_command_refuses_inside_held_lease_without_writing_run_row() {
         let store = Store::open(&db).unwrap();
         let root = snoop::ingest::scanner::repository_root(&repo).unwrap();
         let repository = store
-            .repository_by_root(&root.to_string_lossy())
+            .repository()
             .unwrap()
             .expect("index auto-initialized the repository");
-        assert!(store.acquire_lease(repository.id, "blocker", 3600).unwrap());
-        let runs_before = store.stats_for_repo(repository.id).unwrap().index_runs;
+        assert!(store.acquire_lease("blocker", 3600).unwrap());
+        let runs_before = store.stats().unwrap().index_runs;
 
         let output = Command::new(binary)
             .args(index_args)
@@ -210,7 +194,7 @@ fn index_command_refuses_inside_held_lease_without_writing_run_row() {
             "stderr must name the lock: {stderr}"
         );
 
-        let runs_after = store.stats_for_repo(repository.id).unwrap().index_runs;
+        let runs_after = store.stats().unwrap().index_runs;
         assert_eq!(
             runs_after, runs_before,
             "a Locked refusal writes no index_runs row"
@@ -325,27 +309,21 @@ fn undecodable_source_is_skipped_and_counted_without_commit() {
     );
 
     let repository = store
-        .repository_by_root(&root.to_string_lossy())
+        .repository()
         .unwrap()
         .expect("the repository row exists");
     assert!(
-        store
-            .source_by_locator(repository.id, "bad.md")
-            .unwrap()
-            .is_none(),
+        store.source_by_locator("bad.md").unwrap().is_none(),
         "the undecodable source is never committed"
     );
     assert!(
-        store
-            .source_by_locator(repository.id, "good.md")
-            .unwrap()
-            .is_some(),
+        store.source_by_locator("good.md").unwrap().is_some(),
         "the good source is committed"
     );
 }
 
 #[test]
-fn cli_inspect_unit_is_scoped_to_the_selected_repository() {
+fn cli_rejects_a_second_repository_and_keeps_the_first() {
     use snoop::store::Store;
     let directory = tempfile::tempdir().unwrap();
     let repo_a = directory.path().join("repo-a");
@@ -361,46 +339,44 @@ fn cli_inspect_unit_is_scoped_to_the_selected_repository() {
     let db = directory.path().join("c5.db");
     let binary = env!("CARGO_BIN_EXE_snoop");
 
-    for repo in [&repo_a, &repo_b] {
-        let output = Command::new(binary)
-            .args(["init", repo.to_str().unwrap(), "--db", db.to_str().unwrap()])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let store = Store::open(&db).unwrap();
-    let a = store.ensure_repository(repo_a.to_str().unwrap()).unwrap();
-    let b = store.ensure_repository(repo_b.to_str().unwrap()).unwrap();
-    let alpha_id = store.units_for_source(a.id, "alpha.rs").unwrap()[0].id.0;
-    let beta_id = store.units_for_source(b.id, "beta.rs").unwrap()[0].id.0;
-
     let output = Command::new(binary)
         .args([
-            "inspect",
-            "unit",
-            &beta_id.to_string(),
+            "init",
+            repo_a.to_str().unwrap(),
             "--db",
             db.to_str().unwrap(),
-            "--repo",
-            repo_a.to_str().unwrap(),
         ])
         .output()
         .unwrap();
     assert!(
-        !output.status.success(),
-        "a foreign unit id must not print: {}",
-        String::from_utf8_lossy(&output.stdout)
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
+
+    // The second repository is refused instead of silently sharing the database.
+    let output = Command::new(binary)
+        .args([
+            "index",
+            repo_b.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "a second root must be refused");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(&format!("unit {beta_id} not found")),
-        "{stderr}"
+        stderr.contains("refusing to index"),
+        "the refusal names the bound root: {stderr}"
     );
+
+    // The rejection left the first repository's index intact.
+    let store = Store::open(&db).unwrap();
+    let bound = store.bind_repository(repo_a.to_str().unwrap()).unwrap();
+    assert_eq!(bound.root_path, repo_a.to_str().unwrap());
+    let alpha_id = store.units_for_source("alpha.rs").unwrap()[0].id.0;
+    drop(store);
 
     let output = Command::new(binary)
         .args([
@@ -409,31 +385,6 @@ fn cli_inspect_unit_is_scoped_to_the_selected_repository() {
             &alpha_id.to_string(),
             "--db",
             db.to_str().unwrap(),
-            "--repo",
-            repo_b.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        !output.status.success(),
-        "the reverse direction must also refuse: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!("unit {alpha_id} not found")),
-        "{stderr}"
-    );
-
-    let output = Command::new(binary)
-        .args([
-            "inspect",
-            "unit",
-            &beta_id.to_string(),
-            "--db",
-            db.to_str().unwrap(),
-            "--repo",
-            repo_b.to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -443,9 +394,47 @@ fn cli_inspect_unit_is_scoped_to_the_selected_repository() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"locator\": \"beta.rs\""), "{stdout}");
+    assert!(stdout.contains("\"locator\": \"alpha.rs\""), "{stdout}");
+}
+
+#[test]
+fn cli_index_accepts_canonical_equivalent_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo = directory.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("a.md"), "# Alpha\n\nCanonical roots only.\n").unwrap();
+    let db = directory.path().join("c6.db");
+    let binary = env!("CARGO_BIN_EXE_snoop");
+
+    let output = Command::new(binary)
+        .args([
+            "index",
+            repo.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
     assert!(
-        !stdout.contains("\"anchors\": []"),
-        "same-repo inspect must keep anchors: {stdout}"
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // A trailing-slash spelling canonicalizes to the same bound root.
+    let slashed = format!("{}/", repo.to_str().unwrap());
+    let output = Command::new(binary)
+        .args(["index", &slashed, "--db", db.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outcome: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        outcome["changed_sources"], 0,
+        "the same canonical root is a no-op reindex"
     );
 }

@@ -2,7 +2,6 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
-use snoop::core::RepoId;
 use snoop::inference::MockEmbedder;
 use snoop::ingest::index_repository_bounded;
 use snoop::runtime::{query, QueryChannels, QueryOptions};
@@ -372,14 +371,14 @@ fn is_distractor(locator: &str) -> bool {
 /// Resolve every gold key to the set of unit ids whose locator or evidence
 /// contains the needle. Panics when a key matches nothing: the answer key is
 /// part of the fixture contract.
-fn resolve_gold(store: &Store, repo: RepoId, question: &BenchQuestion) -> Vec<Vec<i64>> {
+fn resolve_gold(store: &Store, question: &BenchQuestion) -> Vec<Vec<i64>> {
     question
         .gold
         .iter()
         .map(|key| {
             let GoldKey::Any(needle) = key;
             let matched: Vec<i64> = store
-                .unit_ids(repo)
+                .unit_ids()
                 .unwrap()
                 .into_iter()
                 .filter(|id| {
@@ -401,13 +400,13 @@ fn classify_miss(
     question_index: usize,
     gold_flat: &[i64],
     store: &Store,
-    repo: RepoId,
+
     options: &QueryOptions,
     report: &snoop::runtime::QueryReport,
 ) -> &'static str {
     let query = &QUESTIONS[question_index].query;
     let lexical: Vec<i64> = store
-        .fts_search(repo, "evidence_text", query, options.top_n)
+        .fts_search("evidence_text", query, options.top_n)
         .unwrap()
         .into_iter()
         .map(|(id, _)| id)
@@ -432,7 +431,7 @@ fn classify_miss(
 fn run_config(
     config: &Config,
     store: &Store,
-    repo: RepoId,
+
     embedder: &dyn snoop::inference::Embedder,
     answer_key: &[Vec<Vec<i64>>],
 ) -> ConfigResult {
@@ -450,7 +449,7 @@ fn run_config(
     for (index, question) in QUESTIONS.iter().enumerate() {
         let gold = &answer_key[index];
         let start = Instant::now();
-        let report = query(store, repo, Some(embedder), question.query, &options).unwrap();
+        let report = query(store, Some(embedder), question.query, &options).unwrap();
         let elapsed = start.elapsed().as_secs_f64() * 1_000.0;
         let diagnostics = report.debug.as_ref().expect("bench diagnostics");
         let packet_ids: Vec<i64> = diagnostics
@@ -482,8 +481,7 @@ fn run_config(
             })
             .sum();
         let density = gold_tokens as f64 / report.packet.token_count.max(1) as f64;
-        let miss =
-            (!recall).then(|| classify_miss(index, &gold_flat, store, repo, &options, &report));
+        let miss = (!recall).then(|| classify_miss(index, &gold_flat, store, &options, &report));
         if let Some(miss) = miss {
             result.misses.push((index, miss));
         } else if let Some((_, value)) = result
@@ -544,7 +542,7 @@ fn benchmark_config_table() {
         index_repository_bounded(&mut store, directory.path(), Some(embedder.as_ref()), None)
             .unwrap();
 
-    let stats = store.stats_for_repo(outcome.repo_id).unwrap();
+    let stats = store.stats().unwrap();
     println!(
         "fixture: {} sources, {} units, {} vectors",
         stats.sources, stats.units, stats.vectors
@@ -556,7 +554,7 @@ fn benchmark_config_table() {
     // in the packet.
     let answer_key: Vec<Vec<Vec<i64>>> = QUESTIONS
         .iter()
-        .map(|question| resolve_gold(&store, outcome.repo_id, question))
+        .map(|question| resolve_gold(&store, question))
         .collect();
     for (index, keys) in answer_key.iter().enumerate() {
         println!(
@@ -573,13 +571,7 @@ fn benchmark_config_table() {
         String::from("| arm | recall | precision | density | avg tokens | avg ms | misses |\n");
     table.push_str("|---|---|---|---|---|---|---|\n");
     for config in &configs {
-        let result = run_config(
-            config,
-            &store,
-            outcome.repo_id,
-            embedder.as_ref(),
-            &answer_key,
-        );
+        let result = run_config(config, &store, embedder.as_ref(), &answer_key);
         let recall: f64 =
             result.questions.iter().map(|q| q.recall).sum::<f64>() / result.questions.len() as f64;
         let precision: f64 = result.questions.iter().map(|q| q.precision).sum::<f64>()

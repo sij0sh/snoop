@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::{
-    ContextItem, ContextPacket, ItemDiagnostics, RepoId, RetrievalUnit, SelectionReason, UnitId,
+    ContextItem, ContextPacket, ItemDiagnostics, RetrievalUnit, SelectionReason, UnitId,
 };
 use crate::inference::Embedder;
 use crate::store::{cosine, Store};
@@ -156,7 +156,6 @@ fn cached_unit(
 /// Oversampled candidate pool for the role-aware builders.
 pub fn query(
     store: &Store,
-    repo_id: RepoId,
     embedder: Option<&dyn Embedder>,
     text: &str,
     options: &QueryOptions,
@@ -165,12 +164,12 @@ pub fn query(
         return Err("vector channels require a configured embedder".into());
     }
     let evidence_lexical = if options.channels.evidence_lexical {
-        store.fts_search(repo_id, "evidence_text", text, options.top_n)?
+        store.fts_search("evidence_text", text, options.top_n)?
     } else {
         Vec::new()
     };
     let routing_lexical = if options.channels.routing_lexical {
-        store.fts_search(repo_id, "routing_text", text, options.top_n)?
+        store.fts_search("routing_text", text, options.top_n)?
     } else {
         Vec::new()
     };
@@ -181,7 +180,6 @@ pub fn query(
     };
     let evidence_vector = if options.channels.evidence_vector {
         store.top_k_cosine(
-            repo_id,
             "evidence",
             embedder.unwrap().model_version(),
             query_vector.as_deref().unwrap_or_default(),
@@ -192,7 +190,6 @@ pub fn query(
     };
     let routing_vector = if options.channels.routing_vector {
         store.top_k_cosine(
-            repo_id,
             "routing",
             embedder.unwrap().model_version(),
             query_vector.as_deref().unwrap_or_default(),
@@ -226,7 +223,7 @@ pub fn query(
     let mut seen_hashes: HashSet<String> = HashSet::new();
     let mut unit_cache: HashMap<i64, Option<RetrievalUnit>> = HashMap::new();
 
-    let expansion = plan_expansion(store, repo_id, &fused, text, options.diagnostics)?;
+    let expansion = plan_expansion(store, &fused, text, options.diagnostics)?;
     let selection_order = expansion.selection_order;
     let expansion_debug = expansion.debug;
 

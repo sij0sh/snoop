@@ -65,11 +65,11 @@ struct GitUnits {
     removal_units: usize,
 }
 
-fn survey(store: &Store, repo: snoop::core::RepoId) -> GitUnits {
+fn survey(store: &Store) -> GitUnits {
     let mut symbol_units = Vec::new();
     let mut file_fallback_paths = Vec::new();
     let mut removal_units = 0;
-    for id in store.unit_ids(repo).unwrap() {
+    for id in store.unit_ids().unwrap() {
         let unit = store.unit_by_id(id).unwrap().unwrap();
         if unit.source_kind != SourceKind::GitCommit {
             continue;
@@ -112,7 +112,7 @@ fn git_history_indexes_symbol_units_and_falls_back() {
     let outcome =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
-    let survey = survey(&store, outcome.repo_id);
+    let survey = survey(&store);
     assert!(
         survey
             .symbol_units
@@ -131,7 +131,6 @@ fn git_history_indexes_symbol_units_and_falls_back() {
 
     let report = query(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         "when was refresh token reuse prevented",
         &QueryOptions {
@@ -154,12 +153,12 @@ fn git_history_indexes_symbol_units_and_falls_back() {
         "query must surface the commit unit with its diff"
     );
 
-    let before = store.unit_ids(outcome.repo_id).unwrap();
+    let before = store.unit_ids().unwrap();
     let second =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(second.changed_sources, 0, "reindex processes nothing");
     assert_eq!(second.units_added, 0);
-    assert_eq!(store.unit_ids(outcome.repo_id).unwrap(), before);
+    assert_eq!(store.unit_ids().unwrap(), before);
 }
 
 #[test]
@@ -177,7 +176,7 @@ fn deleted_file_commits_do_not_block_indexing() {
     let embedder = MockEmbedder::new("mock-v1");
     let outcome =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    let survey = survey(&store, outcome.repo_id);
+    let survey = survey(&store);
     assert!(
         survey.removal_units > 0,
         "deletion commits index as file units"

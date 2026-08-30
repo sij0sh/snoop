@@ -1,21 +1,20 @@
 use super::Store;
-use crate::core::{AnchorKind, RepoId, ResolvedAnchor};
+use crate::core::{AnchorKind, ResolvedAnchor};
 use rusqlite::params;
 
 pub(super) fn ensure_anchor(
     transaction: &rusqlite::Transaction<'_>,
-    repo_id: RepoId,
     kind: AnchorKind,
     value: &str,
 ) -> rusqlite::Result<i64> {
     transaction.execute(
-        "INSERT INTO anchors(repo_id,kind,value) VALUES (?1,?2,?3)
-         ON CONFLICT(repo_id,kind,value) DO NOTHING",
-        params![repo_id.0, kind.as_str(), value],
+        "INSERT INTO anchors(kind,value) VALUES (?1,?2)
+         ON CONFLICT(kind,value) DO NOTHING",
+        params![kind.as_str(), value],
     )?;
     transaction.query_row(
-        "SELECT id FROM anchors WHERE repo_id=?1 AND kind=?2 AND value=?3",
-        params![repo_id.0, kind.as_str(), value],
+        "SELECT id FROM anchors WHERE kind=?1 AND value=?2",
+        params![kind.as_str(), value],
         |row| row.get(0),
     )
 }
@@ -55,7 +54,6 @@ impl Store {
     /// Units linked to one anchor, oldest first.
     pub fn units_for_anchor(
         &self,
-        repo_id: RepoId,
         kind: &str,
         value: &str,
         limit: usize,
@@ -67,13 +65,12 @@ impl Store {
              JOIN anchors a ON a.id=ua.anchor_id
              JOIN retrieval_units u ON u.id=ua.unit_id
              JOIN sources s ON s.id=u.source_id
-             WHERE a.repo_id=?1 AND a.kind=?2 AND a.value=?3 AND u.repo_id=?1
-             ORDER BY ua.unit_id LIMIT ?4";
+             WHERE a.kind=?1 AND a.value=?2
+             ORDER BY ua.unit_id LIMIT ?3";
         let mut statement = self.conn.prepare(sql)?;
-        let rows = statement.query_map(
-            params![repo_id.0, kind.as_str(), value, limit as i64],
-            |row| row.get(0),
-        )?;
+        let rows = statement.query_map(params![kind.as_str(), value, limit as i64], |row| {
+            row.get(0)
+        })?;
         rows.collect()
     }
 }

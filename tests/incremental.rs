@@ -30,9 +30,9 @@ fn git(root: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
-fn count_kind(store: &Store, repo_id: snoop::core::RepoId, kind: SourceKind) -> usize {
+fn count_kind(store: &Store, kind: SourceKind) -> usize {
     store
-        .unit_ids(repo_id)
+        .unit_ids()
         .unwrap()
         .into_iter()
         .filter_map(|id| store.unit_by_id(id).unwrap())
@@ -61,8 +61,8 @@ fn git_incremental_indexes_only_new_commits() {
     let embedder = MockEmbedder::new("mock-v1");
     let first =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    assert_eq!(count_kind(&store, first.repo_id, SourceKind::GitCommit), 1);
-    let git_sources_after_first = store.git_commit_locators(first.repo_id).unwrap();
+    assert_eq!(count_kind(&store, SourceKind::GitCommit), 1);
+    let git_sources_after_first = store.git_commit_locators().unwrap();
     assert_eq!(git_sources_after_first.len(), 1);
 
     std::fs::write(
@@ -79,7 +79,7 @@ fn git_incremental_indexes_only_new_commits() {
     let second =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
-        count_kind(&store, second.repo_id, SourceKind::GitCommit),
+        count_kind(&store, SourceKind::GitCommit),
         2,
         "stored first commit must survive and the new commit must be indexed"
     );
@@ -88,7 +88,7 @@ fn git_incremental_indexes_only_new_commits() {
         "incremental run must reuse stored work: {:?}",
         second
     );
-    assert_eq!(store.git_commit_locators(second.repo_id).unwrap().len(), 2);
+    assert_eq!(store.git_commit_locators().unwrap().len(), 2);
 }
 
 #[test]
@@ -122,19 +122,19 @@ fn git_force_rebuild_walks_all_commits() {
     let embedder = MockEmbedder::new("mock-v1");
     let first =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    assert_eq!(count_kind(&store, first.repo_id, SourceKind::GitCommit), 2);
+    assert_eq!(count_kind(&store, SourceKind::GitCommit), 2);
 
     store
-        .set_repository_content_version(first.repo_id, "stale-version")
+        .set_repository_content_version("stale-version")
         .unwrap();
     let rebuilt =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
-        count_kind(&store, rebuilt.repo_id, SourceKind::GitCommit),
+        count_kind(&store, SourceKind::GitCommit),
         2,
         "force rebuild must reprocess every stored commit"
     );
-    assert_eq!(store.git_commit_locators(rebuilt.repo_id).unwrap().len(), 2);
+    assert_eq!(store.git_commit_locators().unwrap().len(), 2);
 }
 
 #[test]
@@ -147,15 +147,7 @@ fn status_reports_last_index_run_timing() {
     let embedder = MockEmbedder::new("mock-v1");
     index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
-    let stats = store
-        .stats_for_repo(
-            store
-                .first_repository()
-                .unwrap()
-                .expect("repository exists")
-                .id,
-        )
-        .unwrap();
+    let stats = store.stats().unwrap();
     let run = stats
         .last_index_run
         .clone()
@@ -204,10 +196,7 @@ fn session_append_reembeds_only_new_episodes() {
     let embedder = MockEmbedder::new("mock-v1");
     let first =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    assert_eq!(
-        count_kind(&store, first.repo_id, SourceKind::AgentSession),
-        1
-    );
+    assert_eq!(count_kind(&store, SourceKind::AgentSession), 1);
     assert!(first.embedded > 0);
 
     let mut appended = SESSION_HEAD.to_vec();
@@ -217,7 +206,7 @@ fn session_append_reembeds_only_new_episodes() {
     let second =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
-        count_kind(&store, second.repo_id, SourceKind::AgentSession),
+        count_kind(&store, SourceKind::AgentSession),
         2,
         "appended user turn becomes a new episode"
     );
@@ -258,7 +247,7 @@ fn timed_out_rebuild_does_not_mark_format_current() {
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     store
-        .set_repository_content_version(first.repo_id, "stale-version")
+        .set_repository_content_version("stale-version")
         .unwrap();
     let expired = std::time::Instant::now() - std::time::Duration::from_secs(1);
     let outcome =
@@ -266,19 +255,13 @@ fn timed_out_rebuild_does_not_mark_format_current() {
             .unwrap();
     assert!(outcome.timed_out);
 
-    let repository = store
-        .first_repository()
-        .unwrap()
-        .expect("repository exists");
+    let repository = store.repository().unwrap().expect("repository exists");
     assert_eq!(repository.content_version, "stale-version");
 
     let retry =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert!(!retry.timed_out);
-    let repository = store
-        .first_repository()
-        .unwrap()
-        .expect("repository exists");
+    let repository = store.repository().unwrap().expect("repository exists");
     assert_eq!(
         repository.content_version,
         snoop::ingest::INDEX_FORMAT_VERSION

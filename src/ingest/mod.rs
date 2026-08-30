@@ -9,7 +9,7 @@ pub mod units;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::core::{RepoId, Repository, SourceKind};
+use crate::core::{Repository, SourceKind};
 use crate::inference::Embedder;
 use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 
@@ -26,7 +26,6 @@ pub const EMBED_CHUNK_LEN: usize = 32;
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct IndexOutcome {
-    pub repo_id: RepoId,
     pub changed_sources: usize,
     pub unchanged_sources: usize,
     pub deleted_sources: usize,
@@ -73,17 +72,17 @@ pub fn index_repository_bounded(
     let root = scanner::repository_root(start)?;
     let started = std::time::Instant::now();
     let root_string = root.to_string_lossy().to_string();
-    let repository = store.ensure_repository(&root_string)?;
+    let repository = store.bind_repository(&root_string)?;
     let owner = format!(
         "index-{}-{}",
         std::process::id(),
         started.elapsed().as_millis()
     );
-    if !store.acquire_lease(repository.id, &owner, INDEX_LEASE_TTL_SECS)? {
+    if !store.acquire_lease(&owner, INDEX_LEASE_TTL_SECS)? {
         return Err(LockedError.into());
     }
     let ingested = index_repository_body(store, &root, &repository, embedder, deadline, &owner);
-    let _ = store.release_lease(repository.id, &owner);
+    let _ = store.release_lease(&owner);
     let duration_ms = started.elapsed().as_millis() as u64;
     match ingested {
         Ok(outcome) => {
@@ -92,34 +91,28 @@ pub fn index_repository_bounded(
             } else {
                 IndexRunStatus::Ok
             };
-            store.record_index_run(
-                repository.id,
-                &IndexRunStats {
-                    changed_sources: outcome.changed_sources,
-                    unchanged_sources: outcome.unchanged_sources,
-                    deleted_sources: outcome.deleted_sources,
-                    units_added: outcome.units_added,
-                    units_reused: outcome.units_reused,
-                    units_removed: outcome.units_removed,
-                    embedded: outcome.embedded,
-                    duration_ms,
-                    status,
-                },
-            )?;
+            store.record_index_run(&IndexRunStats {
+                changed_sources: outcome.changed_sources,
+                unchanged_sources: outcome.unchanged_sources,
+                deleted_sources: outcome.deleted_sources,
+                units_added: outcome.units_added,
+                units_reused: outcome.units_reused,
+                units_removed: outcome.units_removed,
+                embedded: outcome.embedded,
+                duration_ms,
+                status,
+            })?;
             Ok(outcome)
         }
         Err(error) => {
             if error.is::<LockedError>() {
                 return Err(error);
             }
-            let _ = store.record_index_run(
-                repository.id,
-                &IndexRunStats {
-                    duration_ms,
-                    status: IndexRunStatus::Error,
-                    ..Default::default()
-                },
-            );
+            let _ = store.record_index_run(&IndexRunStats {
+                duration_ms,
+                status: IndexRunStatus::Error,
+                ..Default::default()
+            });
             Err(error)
         }
     }
@@ -139,10 +132,7 @@ fn index_repository_body(
         .iter()
         .map(|source| source.locator.clone())
         .collect();
-    let mut outcome = IndexOutcome {
-        repo_id: repository.id,
-        ..Default::default()
-    };
+    let mut outcome = IndexOutcome::default();
 
     if git::is_history_root(&root) {
         let stored_tip = repository.metadata["git_tip"].as_str().map(String::from);
@@ -150,7 +140,7 @@ fn index_repository_body(
             Some(tip) => git::list_commits_past(&root, git::MAX_COMMITS, tip)?,
             None => git::list_commits(&root, git::MAX_COMMITS)?,
         };
-        for locator in store.git_commit_locators(repository.id)? {
+        for locator in store.git_commit_locators()? {
             present.insert(locator);
         }
         let newest_tip = commits.first().map(|commit| commit.oid.clone());
@@ -159,7 +149,7 @@ fn index_repository_body(
             present.insert(locator.clone());
             if !force_rebuild
                 && store
-                    .source_by_locator(repository.id, &locator)?
+                    .source_by_locator(&locator)?
                     .is_some_and(|existing| existing.content_hash == commit.content_hash)
             {
                 outcome.unchanged_sources += 1;
@@ -171,7 +161,6 @@ fn index_repository_body(
             }
             let units = git::ingest_commit(&root, &commit)?;
             let committed = store.commit_source(SourceIngest {
-                repo_id: repository.id,
                 kind: SourceKind::GitCommit,
                 locator: &locator,
                 content_hash: &commit.content_hash,
@@ -187,7 +176,7 @@ fn index_repository_body(
 
         if let Some(newest) = newest_tip {
             if !outcome.timed_out {
-                store.set_repository_git_tip(repository.id, &newest)?;
+                store.set_repository_git_tip(&newest)?;
             }
         }
     }
@@ -207,7 +196,7 @@ fn index_repository_body(
             let content_hash = blake3::hash(&bytes).to_hex().to_string();
             if !force_rebuild
                 && store
-                    .source_by_locator(repository.id, &locator)?
+                    .source_by_locator(&locator)?
                     .is_some_and(|existing| existing.content_hash == content_hash)
             {
                 outcome.unchanged_sources += 1;
@@ -220,7 +209,6 @@ fn index_repository_body(
             let content = String::from_utf8_lossy(&bytes).into_owned();
             let units = harness::ingest_pi_session(&content, &session.session_id)?;
             let committed = store.commit_source(SourceIngest {
-                repo_id: repository.id,
                 kind: SourceKind::AgentSession,
                 locator: &locator,
                 content_hash: &content_hash,
@@ -241,7 +229,7 @@ fn index_repository_body(
         }
         if !force_rebuild
             && store
-                .source_by_locator(repository.id, &source.locator)?
+                .source_by_locator(&source.locator)?
                 .is_some_and(|existing| existing.content_hash == source.content_hash)
         {
             outcome.unchanged_sources += 1;
@@ -293,7 +281,6 @@ fn index_repository_body(
         };
         let built = units::build_units(&atoms, source.kind, &source.locator);
         let committed = store.commit_source(SourceIngest {
-            repo_id: repository.id,
             kind: source.kind,
             locator: &source.locator,
             content_hash: &source.content_hash,
@@ -312,13 +299,13 @@ fn index_repository_body(
     // version current so the next run resumes embedding instead of
     // rebuilding sources.
     if !outcome.timed_out {
-        outcome.deleted_sources = store.delete_sources_not_in(repository.id, &present)?;
-        store.set_repository_content_version(repository.id, INDEX_FORMAT_VERSION)?;
+        outcome.deleted_sources = store.delete_sources_not_in(&present)?;
+        store.set_repository_content_version(INDEX_FORMAT_VERSION)?;
     }
     if !outcome.timed_out {
         if let Some(embedder) = embedder {
             let (embedded, embeddings_timed_out) =
-                index_embeddings(store, repository.id, embedder, deadline, lease_owner)?;
+                index_embeddings(store, embedder, deadline, lease_owner)?;
             outcome.embedded = embedded;
             outcome.timed_out = embeddings_timed_out;
         }
@@ -328,14 +315,13 @@ fn index_repository_body(
 
 pub fn index_embeddings(
     store: &Store,
-    repo_id: RepoId,
     embedder: &dyn Embedder,
     deadline: Option<std::time::Instant>,
     lease_owner: &str,
 ) -> Result<(usize, bool), Box<dyn std::error::Error + Send + Sync>> {
     let mut embedded = 0;
     for kind in ["evidence", "routing"] {
-        let missing = store.units_missing_vectors(repo_id, kind, embedder.model_version())?;
+        let missing = store.units_missing_vectors(kind, embedder.model_version())?;
         if missing.is_empty() {
             continue;
         }
@@ -343,7 +329,7 @@ pub fn index_embeddings(
             if deadline_passed(deadline) {
                 return Ok((embedded, true));
             }
-            if !store.renew_lease(repo_id, lease_owner, INDEX_LEASE_TTL_SECS)? {
+            if !store.renew_lease(lease_owner, INDEX_LEASE_TTL_SECS)? {
                 return Err("index lease lost during embedding".into());
             }
             let texts: Vec<String> = chunk.iter().map(|(_, text)| text.clone()).collect();

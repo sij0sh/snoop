@@ -93,10 +93,9 @@ fn code_unit(evidence: &str, file: &str, anchor_symbol: Option<&str>) -> BuiltUn
     }
 }
 
-fn commit_units(store: &mut Store, repo: RepoId, locator: &str, units: &[BuiltUnit]) -> Vec<i64> {
+fn commit_units(store: &mut Store, locator: &str, units: &[BuiltUnit]) -> Vec<i64> {
     store
         .commit_source(SourceIngest {
-            repo_id: repo,
             kind: crate::core::SourceKind::Code,
             locator,
             content_hash: &hash_segments(&[locator, &units.len().to_string()]),
@@ -106,7 +105,7 @@ fn commit_units(store: &mut Store, repo: RepoId, locator: &str, units: &[BuiltUn
         })
         .unwrap();
     store
-        .units_for_source(repo, locator)
+        .units_for_source(locator)
         .unwrap()
         .iter()
         .map(|unit| unit.id.0)
@@ -147,18 +146,16 @@ fn vector_channels_require_a_configured_embedder() {
         ))),
         ..options_all()
     };
-    let error = query(&store, RepoId(1), None, "alpha", &options).unwrap_err();
+    let error = query(&store, None, "alpha", &options).unwrap_err();
     assert!(error.to_string().contains("configured embedder"));
 }
 
 #[test]
 fn lexical_mode_runs_without_an_embedder_and_dedups_by_content_hash() {
     let mut store = Store::open_in_memory().unwrap();
-    let repo = RepoId(1);
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     let original = commit_units(
         &mut store,
-        repo,
         "src/a.rs",
         &[code_unit(
             "alpha text about auth",
@@ -169,7 +166,6 @@ fn lexical_mode_runs_without_an_embedder_and_dedups_by_content_hash() {
 
     let duplicate = commit_units(
         &mut store,
-        repo,
         "src/dup.rs",
         &[code_unit(
             "alpha text about auth",
@@ -181,7 +177,7 @@ fn lexical_mode_runs_without_an_embedder_and_dedups_by_content_hash() {
         channels: QueryChannels::for_embedder(None),
         ..options_all()
     };
-    let report = query(&store, repo, None, "alpha", &options).unwrap();
+    let report = query(&store, None, "alpha", &options).unwrap();
     let ids: Vec<i64> = report
         .debug
         .as_ref()
@@ -211,11 +207,9 @@ fn sized_evidence(tokens: usize) -> String {
 #[test]
 fn budget_skips_oversized_candidate_and_admits_smaller_ones() {
     let mut store = Store::open_in_memory().unwrap();
-    let repo = RepoId(1);
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     let ids = commit_units(
         &mut store,
-        repo,
         "src/budget.rs",
         &[
             code_unit(&sized_evidence(10), "src/budget.rs", None),
@@ -227,7 +221,7 @@ fn budget_skips_oversized_candidate_and_admits_smaller_ones() {
         max_tokens: 5,
         ..options_all()
     };
-    let report = query(&store, repo, None, "auth", &options).unwrap();
+    let report = query(&store, None, "auth", &options).unwrap();
     let packet_ids: Vec<i64> = report
         .debug
         .as_ref()
@@ -253,11 +247,9 @@ fn budget_skips_oversized_candidate_and_admits_smaller_ones() {
 #[test]
 fn budget_rejects_every_candidate_that_does_not_fit() {
     let mut store = Store::open_in_memory().unwrap();
-    let repo = RepoId(1);
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     commit_units(
         &mut store,
-        repo,
         "src/huge.rs",
         &[code_unit(&sized_evidence(10), "src/huge.rs", None)],
     );
@@ -265,7 +257,7 @@ fn budget_rejects_every_candidate_that_does_not_fit() {
         max_tokens: 5,
         ..options_all()
     };
-    let report = query(&store, repo, None, "auth", &options).unwrap();
+    let report = query(&store, None, "auth", &options).unwrap();
     assert!(report.packet.items.is_empty());
     assert_eq!(report.packet.token_count, 0);
 }
@@ -273,11 +265,9 @@ fn budget_rejects_every_candidate_that_does_not_fit() {
 #[test]
 fn required_role_admission_respects_the_budget() {
     let mut store = Store::open_in_memory().unwrap();
-    let repo = RepoId(1);
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     let ids = commit_units(
         &mut store,
-        repo,
         "src/required.rs",
         &[
             code_unit(&sized_evidence(10), "src/required.rs", None),
@@ -290,14 +280,7 @@ fn required_role_admission_respects_the_budget() {
     };
     // "how does ... work" opens the current-behavior facet whose required
     // role maps onto code units.
-    let report = query(
-        &store,
-        repo,
-        None,
-        "how does the auth login flow work",
-        &options,
-    )
-    .unwrap();
+    let report = query(&store, None, "how does the auth login flow work", &options).unwrap();
     let packet_ids: Vec<i64> = report
         .debug
         .as_ref()

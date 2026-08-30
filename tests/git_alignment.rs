@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use snoop::core::{RepoId, SourceKind};
+use snoop::core::SourceKind;
 use snoop::inference::MockEmbedder;
 use snoop::ingest::index_repository_bounded;
 use snoop::store::Store;
@@ -73,9 +73,9 @@ struct Change {
     routing: String,
 }
 
-fn git_changes(store: &Store, repo: RepoId) -> Vec<Change> {
+fn git_changes(store: &Store) -> Vec<Change> {
     let mut changes = Vec::new();
-    for id in store.unit_ids(repo).unwrap() {
+    for id in store.unit_ids().unwrap() {
         let unit = store.unit_by_id(id).unwrap().unwrap();
         if unit.source_kind != SourceKind::GitCommit {
             continue;
@@ -109,7 +109,7 @@ fn indexed_changes(directory: &tempfile::TempDir) -> Vec<Change> {
     let embedder = MockEmbedder::new("mock-v1");
     let outcome =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    git_changes(&store, outcome.repo_id)
+    git_changes(&store)
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn git_symbol_ids_match_code_unit_identities() {
     let outcome =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     let mut code_identity: Option<String> = None;
-    for id in store.unit_ids(outcome.repo_id).unwrap() {
+    for id in store.unit_ids().unwrap() {
         let unit = store.unit_by_id(id).unwrap().unwrap();
         if unit.source_kind != SourceKind::Code {
             continue;
@@ -214,7 +214,7 @@ fn git_symbol_ids_match_code_unit_identities() {
             }
         }
     }
-    let changes = git_changes(&store, outcome.repo_id);
+    let changes = git_changes(&store);
     let git_identity = changes
         .iter()
         .find(|change| change.symbol_id.as_deref() == Some("src/tool.py > load"))
@@ -230,7 +230,7 @@ fn git_indexing_is_deterministic() {
         let outcome =
             index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
         let mut rows = Vec::new();
-        for id in store.unit_ids(outcome.repo_id).unwrap() {
+        for id in store.unit_ids().unwrap() {
             let unit = store.unit_by_id(id).unwrap().unwrap();
             if unit.source_kind != SourceKind::GitCommit {
                 continue;

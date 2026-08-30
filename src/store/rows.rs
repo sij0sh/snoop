@@ -1,15 +1,12 @@
-use crate::core::{
-    RepoId, Repository, RetrievalUnit, Source, SourceId, SourceKind, UnitId, UnitKind,
-};
+use crate::core::{Repository, RetrievalUnit, Source, SourceId, SourceKind, UnitId, UnitKind};
 
-pub(super) const UNIT_SELECT: &str = "u.id,u.repo_id,u.source_id,s.kind,s.locator,u.kind,u.evidence_text,u.routing_text,u.token_count,u.content_hash,COALESCE(u.timestamp,s.modified_at),u.metadata";
+pub(super) const UNIT_SELECT: &str = "u.id,u.source_id,s.kind,s.locator,u.kind,u.evidence_text,u.routing_text,u.token_count,u.content_hash,COALESCE(u.timestamp,s.modified_at),u.metadata";
 
 pub(super) fn repository_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repository> {
     Ok(Repository {
-        id: RepoId(row.get(0)?),
-        root_path: row.get(1)?,
-        content_version: row.get(2)?,
-        metadata: serde_json::from_str(&row.get::<_, String>(3)?)
+        root_path: row.get(0)?,
+        content_version: row.get(1)?,
+        metadata: serde_json::from_str(&row.get::<_, String>(2)?)
             .unwrap_or(serde_json::Value::Null),
     })
 }
@@ -17,17 +14,16 @@ pub(super) fn repository_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<R
 pub(super) fn retrieval_unit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RetrievalUnit> {
     Ok(RetrievalUnit {
         id: UnitId(row.get(0)?),
-        repo_id: RepoId(row.get(1)?),
-        source_id: SourceId(row.get(2)?),
-        source_kind: SourceKind::parse(&row.get::<_, String>(3)?).unwrap_or(SourceKind::Text),
-        locator: row.get(4)?,
-        kind: UnitKind::parse(&row.get::<_, String>(5)?).unwrap_or(UnitKind::Prose),
-        evidence_text: row.get(6)?,
-        routing_text: row.get(7)?,
-        token_count: row.get::<_, i64>(8)? as usize,
-        content_hash: row.get(9)?,
-        timestamp: row.get(10)?,
-        metadata: serde_json::from_str(&row.get::<_, String>(11)?)
+        source_id: SourceId(row.get(1)?),
+        source_kind: SourceKind::parse(&row.get::<_, String>(2)?).unwrap_or(SourceKind::Text),
+        locator: row.get(3)?,
+        kind: UnitKind::parse(&row.get::<_, String>(4)?).unwrap_or(UnitKind::Prose),
+        evidence_text: row.get(5)?,
+        routing_text: row.get(6)?,
+        token_count: row.get::<_, i64>(7)? as usize,
+        content_hash: row.get(8)?,
+        timestamp: row.get(9)?,
+        metadata: serde_json::from_str(&row.get::<_, String>(10)?)
             .unwrap_or(serde_json::Value::Null),
     })
 }
@@ -35,12 +31,11 @@ pub(super) fn retrieval_unit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Resu
 pub(super) fn source_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Source> {
     Ok(Source {
         id: SourceId(row.get(0)?),
-        repo_id: RepoId(row.get(1)?),
-        kind: SourceKind::parse(&row.get::<_, String>(2)?).unwrap_or(SourceKind::Text),
-        locator: row.get(3)?,
-        content_hash: row.get(4)?,
-        modified_at: row.get(5)?,
-        metadata: serde_json::from_str(&row.get::<_, String>(6)?)
+        kind: SourceKind::parse(&row.get::<_, String>(1)?).unwrap_or(SourceKind::Text),
+        locator: row.get(2)?,
+        content_hash: row.get(3)?,
+        modified_at: row.get(4)?,
+        metadata: serde_json::from_str(&row.get::<_, String>(5)?)
             .unwrap_or(serde_json::Value::Null),
     })
 }

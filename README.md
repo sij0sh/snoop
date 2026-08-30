@@ -29,6 +29,11 @@ snoop sessions refresh_session
 
 The default database is `.snoop.db`. Set `SNOOP_DB` or pass `--db` to override it.
 
+One database holds exactly one repository. The first `snoop init`/`index`/`ensure` binds the
+database to that repository's canonical root; a second root is refused instead of silently
+sharing, and pre-existing databases migrate automatically unless they contain multiple
+repositories (create one database per repository and reindex).
+
 Queries emit lean packets: each item carries only source kind, locator, evidence text, and timestamp. `snoop query --explain` additionally prints selection diagnostics to stderr (selected unit IDs, source slices, resolved anchors, selection reasons, channel and fused rankings, anchor-expansion decisions). `max_tokens` is an evidence budget: the sum of admitted evidence never exceeds it.
 
 Without a configured embedder, Snoop runs in **lexical-and-anchor mode**: evidence and routing

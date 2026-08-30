@@ -28,8 +28,6 @@ enum Command {
         path: Option<PathBuf>,
         #[arg(long)]
         db: Option<PathBuf>,
-        #[arg(long)]
-        repo: Option<PathBuf>,
     },
     Ensure {
         #[arg(default_value = ".")]
@@ -42,8 +40,6 @@ enum Command {
     Status {
         #[arg(long)]
         db: Option<PathBuf>,
-        #[arg(long)]
-        repo: Option<PathBuf>,
     },
     Query {
         query: String,
@@ -57,36 +53,26 @@ enum Command {
         explain: bool,
         #[arg(long)]
         evidence_only: bool,
-        #[arg(long)]
-        repo: Option<PathBuf>,
     },
     Inspect {
         target: String,
         value: String,
         #[arg(long)]
         db: Option<PathBuf>,
-        #[arg(long)]
-        repo: Option<PathBuf>,
     },
     History {
         symbol: String,
         #[arg(long)]
         db: Option<PathBuf>,
-        #[arg(long)]
-        repo: Option<PathBuf>,
     },
     Sessions {
         symbol: String,
         #[arg(long)]
         db: Option<PathBuf>,
-        #[arg(long)]
-        repo: Option<PathBuf>,
     },
     Mcp {
         #[arg(long)]
         db: Option<PathBuf>,
-        #[arg(long)]
-        repo: Option<PathBuf>,
     },
 }
 
@@ -105,26 +91,10 @@ fn open_store(path: &Path) -> Result<Store, Box<dyn std::error::Error + Send + S
     Ok(Store::open(path)?)
 }
 
-fn select_repository(
-    store: &Store,
-    explicit: Option<&Path>,
-) -> Result<Repository, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(path) = explicit {
-        let root = scanner::repository_root(path)?;
-        return store
-            .repository_by_root(&root.to_string_lossy())?
-            .ok_or_else(|| format!("repository is not indexed: {}", root.display()).into());
-    }
-    let current = scanner::repository_root(&std::env::current_dir()?)?;
-    if let Some(repository) = store.repository_by_root(&current.to_string_lossy())? {
-        return Ok(repository);
-    }
-    if store.stats()?.repositories == 1 {
-        return store
-            .first_repository()?
-            .ok_or_else(|| "index a repository first".into());
-    }
-    Err("select a repository with --repo".into())
+fn bound_repository(store: &Store) -> Result<Repository, Box<dyn std::error::Error + Send + Sync>> {
+    store
+        .repository()?
+        .ok_or_else(|| "index a repository first".into())
 }
 
 fn embedder() -> Option<Box<dyn Embedder>> {
@@ -173,7 +143,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Command::Init { path, db } => {
             let mut store = open_store(&db_path(db))?;
             let root = scanner::repository_root(&path)?;
-            let repository = store.ensure_repository(&root.to_string_lossy())?;
+            let repository = store.bind_repository(&root.to_string_lossy())?;
             let outcome = index_repository_bounded(&mut store, &root, None, None)?;
             let skipped = if outcome.skipped_sources > 0 {
                 format!(", {} skipped", outcome.skipped_sources)
@@ -181,22 +151,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 String::new()
             };
             println!(
-                "initialized repository {} at {} ({} sources{})",
-                repository.id.0,
+                "initialized repository at {} ({} sources{})",
                 repository.root_path,
                 outcome.changed_sources + outcome.unchanged_sources,
                 skipped
             );
         }
-        Command::Index { path, db, repo } => {
+        Command::Index { path, db } => {
             let mut store = open_store(&db_path(db))?;
             let root = match path {
                 Some(path) => scanner::repository_root(&path)?,
-                None => match repo {
-                    Some(repo) => scanner::repository_root(&repo)?,
-                    None => PathBuf::from(select_repository(&store, None)?.root_path),
-                },
+                None => PathBuf::from(bound_repository(&store)?.root_path),
             };
+            store.bind_repository(&root.to_string_lossy())?;
             let embedder = embedder();
             let outcome = index_repository_bounded(&mut store, &root, embedder.as_deref(), None)?;
 
@@ -215,7 +182,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(store) => store,
                 Err(error) => print_ensure_error(error.to_string()),
             };
-            let _repository = match store.ensure_repository(&root.to_string_lossy()) {
+            let _repository = match store.bind_repository(&root.to_string_lossy()) {
                 Ok(repository) => repository,
                 Err(error) => print_ensure_error(error.to_string()),
             };
@@ -254,10 +221,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        Command::Status { db, repo } => {
+        Command::Status { db } => {
             let store = open_store(&db_path(db))?;
-            let repository = select_repository(&store, repo.as_deref())?;
-            let mut status = serde_json::to_value(store.stats_for_repo(repository.id)?)?;
+            bound_repository(&store)?;
+            let mut status = serde_json::to_value(store.stats()?)?;
             let embedder = embedder();
             let (mode, model) = retrieval_mode(embedder.as_deref());
             status["retrieval_mode"] = serde_json::json!(mode);
@@ -265,7 +232,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 status["embedding_model"] = serde_json::json!(model);
             }
             let vector_models: Vec<serde_json::Value> = store
-                .vector_models(repository.id)?
+                .vector_models()?
                 .into_iter()
                 .map(|(model, vectors)| serde_json::json!({"model": model, "vectors": vectors}))
                 .collect();
@@ -281,10 +248,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             top,
             explain,
             evidence_only,
-            repo,
         } => {
             let store = open_store(&db_path(db))?;
-            let repository = select_repository(&store, repo.as_deref())?;
+            bound_repository(&store)?;
             let embedder = embedder();
             let channels = if evidence_only {
                 if embedder.is_some() {
@@ -297,7 +263,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             };
             let report = query(
                 &store,
-                repository.id,
                 embedder.as_deref(),
                 &query_text,
                 &QueryOptions {
@@ -312,18 +277,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             println!("{}", serde_json::to_string_pretty(&report.packet)?);
         }
-        Command::Inspect {
-            target,
-            value,
-            db,
-            repo,
-        } => {
+        Command::Inspect { target, value, db } => {
             let store = open_store(&db_path(db))?;
-            let repository = select_repository(&store, repo.as_deref())?;
+            bound_repository(&store)?;
             match target.as_str() {
                 "unit" => {
                     let id: i64 = value.parse().map_err(|_| "unit id must be numeric")?;
-                    let unit = store.unit_by_id_in_repo(repository.id, id)?.ok_or_else(
+                    let unit = store.unit_by_id(id)?.ok_or_else(
                         || -> Box<dyn std::error::Error + Send + Sync> {
                             format!("unit {id} not found").into()
                         },
@@ -348,25 +308,24 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     );
                 }
                 "symbol" => {
-                    let entries =
-                        snoop::mcp::symbol_context_entries(&store, repository.id, &value)?;
+                    let entries = snoop::mcp::symbol_context_entries(&store, &value)?;
                     println!("{}", serde_json::to_string_pretty(&entries)?);
                 }
                 other => return Err(format!("unknown inspect target: {other}").into()),
             }
         }
-        Command::History { symbol, db, repo } => {
+        Command::History { symbol, db } => {
             let store = open_store(&db_path(db))?;
-            let repository = select_repository(&store, repo.as_deref())?;
-            let entries = snoop::mcp::history_entries(&store, repository.id, &symbol)?;
+            bound_repository(&store)?;
+            let entries = snoop::mcp::history_entries(&store, &symbol)?;
             println!("{}", serde_json::to_string_pretty(&entries)?);
         }
-        Command::Sessions { symbol, db, repo } => {
+        Command::Sessions { symbol, db } => {
             let store = open_store(&db_path(db))?;
-            let repository = select_repository(&store, repo.as_deref())?;
+            bound_repository(&store)?;
 
             let mut defining_files = std::collections::HashSet::new();
-            for id in store.units_for_anchor(repository.id, "symbol", &symbol, 64)? {
+            for id in store.units_for_anchor("symbol", &symbol, 64)? {
                 if let Some(unit) = store.unit_by_id(id)? {
                     if unit.source_kind == snoop::core::SourceKind::Code {
                         for anchor in store.anchors_for_unit(id)? {
@@ -380,7 +339,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut episodes = Vec::new();
             let mut seen = std::collections::HashSet::new();
             for file in &defining_files {
-                for id in store.units_for_anchor(repository.id, "file", file, 64)? {
+                for id in store.units_for_anchor("file", file, 64)? {
                     if !seen.insert(id) {
                         continue;
                     }
@@ -398,15 +357,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             println!("{}", serde_json::to_string_pretty(&episodes)?);
         }
-        Command::Mcp { db, repo } => {
+        Command::Mcp { db } => {
             let store = open_store(&db_path(db))?;
-            let repository = select_repository(&store, repo.as_deref())?;
+            bound_repository(&store)?;
             let embedder = embedder();
             let stdin = std::io::stdin();
             let stdout = std::io::stdout();
             snoop::mcp::serve(
                 &store,
-                repository.id,
                 embedder.as_deref(),
                 &mut stdin.lock(),
                 &mut stdout.lock(),

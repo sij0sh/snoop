@@ -64,7 +64,7 @@ fn sessions_index_as_episodes_with_references_not_evidence() {
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let episode_units: Vec<_> = store
-        .unit_ids(outcome.repo_id)
+        .unit_ids()
         .unwrap()
         .into_iter()
         .filter_map(|id| store.unit_by_id(id).unwrap())
@@ -136,9 +136,7 @@ fn sessions_table_populated_and_query_returns_agent_evidence() {
     let outcome =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
-    let session_units = store
-        .units_for_anchor(outcome.repo_id, "session", SESSION_ID, 32)
-        .unwrap();
+    let session_units = store.units_for_anchor("session", SESSION_ID, 32).unwrap();
     assert_eq!(
         session_units.len(),
         2,
@@ -147,7 +145,6 @@ fn sessions_table_populated_and_query_returns_agent_evidence() {
 
     let report = query(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         "refresh_session loop stale token",
         &QueryOptions {
@@ -203,9 +200,7 @@ fn reindexing_unchanged_sessions_is_a_noop() {
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
     index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    let before = store
-        .unit_ids(store.first_repository().unwrap().unwrap().id)
-        .unwrap();
+    let before = store.unit_ids().unwrap();
     let second =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(second.changed_sources, 0);

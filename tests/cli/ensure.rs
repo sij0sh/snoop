@@ -56,13 +56,7 @@ fn cli_ensure_refreshes_then_reports_up_to_date() {
     assert_eq!(report["outcome"]["embedded"], 0);
 
     let output = Command::new(binary)
-        .args([
-            "status",
-            "--db",
-            db.to_str().unwrap(),
-            "--repo",
-            repo.to_str().unwrap(),
-        ])
+        .args(["status", "--db", db.to_str().unwrap()])
         .env("SNOOP_EMBED_URL", "mock")
         .output()
         .unwrap();
@@ -110,13 +104,7 @@ fn cli_ensure_reports_timeout_with_a_zero_budget_and_self_heals() {
     assert!(report.get("outcome").is_none());
 
     let output = Command::new(binary)
-        .args([
-            "status",
-            "--db",
-            db.to_str().unwrap(),
-            "--repo",
-            repo.to_str().unwrap(),
-        ])
+        .args(["status", "--db", db.to_str().unwrap()])
         .env("SNOOP_EMBED_URL", "mock")
         .output()
         .unwrap();
@@ -185,10 +173,10 @@ fn cli_ensure_reports_locked_under_a_held_lease() {
     let root = snoop::ingest::scanner::repository_root(&repo).unwrap();
     let store = Store::open(&db).unwrap();
     let repository = store
-        .repository_by_root(&root.to_string_lossy())
+        .repository()
         .unwrap()
         .expect("ensure auto-initialized the repository");
-    assert!(store.acquire_lease(repository.id, "blocker", 3600).unwrap());
+    assert!(store.acquire_lease("blocker", 3600).unwrap());
 
     let output = Command::new(binary)
         .args(ensure_args)
@@ -203,7 +191,7 @@ fn cli_ensure_reports_locked_under_a_held_lease() {
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"], "locked");
 
-    store.release_lease(repository.id, "blocker").unwrap();
+    store.release_lease("blocker").unwrap();
     drop(store);
     let output = Command::new(binary)
         .args(ensure_args)

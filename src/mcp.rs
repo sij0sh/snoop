@@ -1,6 +1,6 @@
 use std::io::{BufRead, Write};
 
-use crate::core::{RepoId, SourceKind};
+use crate::core::SourceKind;
 use crate::inference::Embedder;
 use crate::runtime::{query, QueryChannels, QueryOptions};
 use crate::store::Store;
@@ -14,11 +14,10 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 
 pub fn symbol_context_entries(
     store: &Store,
-    repo_id: RepoId,
     symbol: &str,
 ) -> Result<Vec<serde_json::Value>, Error> {
     let mut report = Vec::new();
-    for id in store.units_for_anchor(repo_id, "symbol", symbol, ANCHOR_LOOKUP_LIMIT)? {
+    for id in store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)? {
         if let Some(unit) = store.unit_by_id(id)? {
             report.push(serde_json::json!({
                 "unit_id": id,
@@ -31,13 +30,9 @@ pub fn symbol_context_entries(
     Ok(report)
 }
 
-pub fn history_entries(
-    store: &Store,
-    repo_id: RepoId,
-    symbol: &str,
-) -> Result<Vec<serde_json::Value>, Error> {
+pub fn history_entries(store: &Store, symbol: &str) -> Result<Vec<serde_json::Value>, Error> {
     let mut history = Vec::new();
-    for id in store.units_for_anchor(repo_id, "symbol", symbol, ANCHOR_LOOKUP_LIMIT)? {
+    for id in store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)? {
         if let Some(unit) = store.unit_by_id(id)? {
             if unit.source_kind == SourceKind::GitCommit {
                 history.push(serde_json::json!({
@@ -111,7 +106,6 @@ fn text_result(text: String) -> serde_json::Value {
 
 pub fn handle_message(
     store: &Store,
-    repo_id: RepoId,
     embedder: Option<&dyn Embedder>,
     message: &serde_json::Value,
 ) -> Option<serde_json::Value> {
@@ -151,7 +145,7 @@ pub fn handle_message(
                 .cloned()
                 .unwrap_or(serde_json::json!({}));
             match name {
-                Some(tool) => Some(call_tool(store, repo_id, embedder, id, tool, &arguments)),
+                Some(tool) => Some(call_tool(store, embedder, id, tool, &arguments)),
                 None => Some(error_response(
                     id,
                     -32602,
@@ -169,7 +163,6 @@ pub fn handle_message(
 
 fn call_tool(
     store: &Store,
-    repo_id: RepoId,
     embedder: Option<&dyn Embedder>,
     id: serde_json::Value,
     tool: &str,
@@ -190,17 +183,17 @@ fn call_tool(
                 channels: QueryChannels::for_embedder(embedder),
                 ..QueryOptions::default()
             };
-            query(store, repo_id, embedder, query_text, &query_options)
+            query(store, embedder, query_text, &query_options)
                 .map(|report| serde_json::to_value(&report.packet).unwrap_or_default())
                 .map_err(|error| error.to_string())
         }
         "repo_symbol_context" => required_symbol(arguments).and_then(|symbol| {
-            symbol_context_entries(store, repo_id, &symbol)
+            symbol_context_entries(store, &symbol)
                 .map(|entries| serde_json::json!(entries))
                 .map_err(|error| error.to_string())
         }),
         "repo_history" => required_symbol(arguments).and_then(|symbol| {
-            history_entries(store, repo_id, &symbol)
+            history_entries(store, &symbol)
                 .map(|entries| serde_json::json!(entries))
                 .map_err(|error| error.to_string())
         }),
@@ -229,7 +222,6 @@ fn required_symbol(arguments: &serde_json::Value) -> Result<String, String> {
 
 pub fn serve<R: BufRead, W: Write>(
     store: &Store,
-    repo_id: RepoId,
     embedder: Option<&dyn Embedder>,
     input: &mut R,
     output: &mut W,
@@ -243,7 +235,7 @@ pub fn serve<R: BufRead, W: Write>(
             continue;
         }
         let response = match serde_json::from_str::<serde_json::Value>(&line) {
-            Ok(message) => handle_message(store, repo_id, embedder, &message),
+            Ok(message) => handle_message(store, embedder, &message),
             Err(error) => Some(error_response(
                 serde_json::Value::Null,
                 -32700,
@@ -268,6 +260,6 @@ mod tests {
             serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
         let store = Store::open_in_memory().unwrap();
         let embedder = crate::inference::MockEmbedder::new("mock-v1");
-        assert!(handle_message(&store, RepoId(1), Some(&embedder), &notification).is_none());
+        assert!(handle_message(&store, Some(&embedder), &notification).is_none());
     }
 }

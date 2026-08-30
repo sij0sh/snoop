@@ -101,7 +101,6 @@ fn four_source_packet_stays_in_budget() {
 
     let report = query(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         "refresh_session rotation order",
         &QueryOptions {
@@ -153,7 +152,6 @@ fn milestone_c_resumed_work_returns_prior_episode_with_code() {
 
     let report = query(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         "resume work on refresh_session rotation",
         &QueryOptions {
@@ -249,8 +247,8 @@ fn full_cli_surface_works_on_the_fixture() {
             ("SNOOP_SESSIONS_ROOT", sessions_arg),
         ],
     );
-    run(&["index", "--db", db_arg, "--repo", repo_arg], &env);
-    let status = run(&["status", "--db", db_arg, "--repo", repo_arg], &env);
+    run(&["index", repo_arg, "--db", db_arg], &env);
+    let status = run(&["status", "--db", db_arg], &env);
     assert!(status.contains("\"sources\""));
     let (query_out, explain_out) = run_with_stderr(
         &[
@@ -258,8 +256,6 @@ fn full_cli_surface_works_on_the_fixture() {
             "refresh_session rotation",
             "--db",
             db_arg,
-            "--repo",
-            repo_arg,
             "--explain",
         ],
         &env,
@@ -276,15 +272,7 @@ fn full_cli_surface_works_on_the_fixture() {
     let diagnostics: serde_json::Value = serde_json::from_str(&explain_out).unwrap();
     let first_unit = diagnostics["items"][0]["unit_id"].as_i64().unwrap();
     let inspect_unit = run(
-        &[
-            "inspect",
-            "unit",
-            &first_unit.to_string(),
-            "--db",
-            db_arg,
-            "--repo",
-            repo_arg,
-        ],
+        &["inspect", "unit", &first_unit.to_string(), "--db", db_arg],
         &env,
     );
     let inspected: serde_json::Value = serde_json::from_str(&inspect_unit).unwrap();
@@ -294,48 +282,20 @@ fn full_cli_surface_works_on_the_fixture() {
         .is_some_and(|list| !list.is_empty()));
 
     let inspect_symbol = run(
-        &[
-            "inspect",
-            "symbol",
-            "refresh_session",
-            "--db",
-            db_arg,
-            "--repo",
-            repo_arg,
-        ],
+        &["inspect", "symbol", "refresh_session", "--db", db_arg],
         &env,
     );
     let symbols: serde_json::Value = serde_json::from_str(&inspect_symbol).unwrap();
     assert!(symbols.as_array().is_some_and(|list| !list.is_empty()));
 
-    let history = run(
-        &[
-            "history",
-            "refresh_session",
-            "--db",
-            db_arg,
-            "--repo",
-            repo_arg,
-        ],
-        &env,
-    );
+    let history = run(&["history", "refresh_session", "--db", db_arg], &env);
     let history: serde_json::Value = serde_json::from_str(&history).unwrap();
     assert!(
         history.as_array().is_some_and(|list| !list.is_empty()),
         "history returns commit evidence: {history}"
     );
 
-    let sessions = run(
-        &[
-            "sessions",
-            "refresh_session",
-            "--db",
-            db_arg,
-            "--repo",
-            repo_arg,
-        ],
-        &env,
-    );
+    let sessions = run(&["sessions", "refresh_session", "--db", db_arg], &env);
     let sessions: serde_json::Value = serde_json::from_str(&sessions).unwrap();
     assert!(
         sessions.as_array().is_some_and(|list| !list.is_empty()),

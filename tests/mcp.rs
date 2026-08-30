@@ -2,7 +2,6 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use snoop::core::RepoId;
 use snoop::inference::MockEmbedder;
 use snoop::ingest::index_repository_bounded;
 use snoop::mcp::{handle_message, serve, PROTOCOL_VERSION};
@@ -33,7 +32,6 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let response = handle_message(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         &serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -47,7 +45,6 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let ping = handle_message(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}),
     )
@@ -56,7 +53,6 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let tools = handle_message(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
     )
@@ -78,7 +74,6 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let unknown = handle_message(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "resources/list"}),
     )
@@ -87,7 +82,6 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let misuse = handle_message(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
             "params": {"name": "get_repo_context", "arguments": {}}}),
@@ -97,7 +91,6 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let empty_symbol = handle_message(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
             "params": {"name": "repo_history", "arguments": {}}}),
@@ -107,7 +100,6 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let unknown_tool = handle_message(
         &store,
-        outcome.repo_id,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
             "params": {"name": "no_such_tool", "arguments": {}}}),
@@ -121,14 +113,7 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
         .to_string();
     let mut input = script.as_bytes();
     let mut output = Vec::new();
-    serve(
-        &store,
-        outcome.repo_id,
-        Some(&embedder),
-        &mut input,
-        &mut output,
-    )
-    .unwrap();
+    serve(&store, Some(&embedder), &mut input, &mut output).unwrap();
     let lines: Vec<serde_json::Value> = std::str::from_utf8(&output)
         .unwrap()
         .lines()
@@ -217,7 +202,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
 
     for args in [
         vec!["init", repo_arg, "--db", db.to_str().unwrap()],
-        vec!["index", "--db", db.to_str().unwrap(), "--repo", repo_arg],
+        vec!["index", repo_arg, "--db", db.to_str().unwrap()],
     ] {
         let output = Command::new(binary)
             .args(&args)
@@ -232,7 +217,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
     }
 
     let mut child = Command::new(binary)
-        .args(["mcp", "--db", db.to_str().unwrap(), "--repo", repo_arg])
+        .args(["mcp", "--db", db.to_str().unwrap()])
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -347,6 +332,6 @@ fn serve_exits_cleanly_at_eof() {
     let embedder = MockEmbedder::new("mock-v1");
     let mut input = b"".as_slice();
     let mut output = Vec::new();
-    serve(&store, RepoId(1), Some(&embedder), &mut input, &mut output).unwrap();
+    serve(&store, Some(&embedder), &mut input, &mut output).unwrap();
     assert!(output.is_empty());
 }

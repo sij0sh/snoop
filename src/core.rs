@@ -2,9 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub struct RepoId(pub i64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct SourceId(pub i64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -44,7 +41,6 @@ impl SourceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repository {
-    pub id: RepoId,
     pub root_path: String,
     pub content_version: String,
     pub metadata: Value,
@@ -53,7 +49,6 @@ pub struct Repository {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source {
     pub id: SourceId,
-    pub repo_id: RepoId,
     pub kind: SourceKind,
     pub locator: String,
     pub content_hash: String,
@@ -236,7 +231,6 @@ pub struct BuiltUnit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetrievalUnit {
     pub id: UnitId,
-    pub repo_id: RepoId,
     pub source_id: SourceId,
     pub source_kind: SourceKind,
     pub locator: String,

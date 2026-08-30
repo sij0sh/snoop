@@ -50,30 +50,21 @@ fn indexes_incrementally_and_queries_four_channels() {
     assert!(first.units_added >= 4);
     assert_eq!(first.embedded, store.stats().unwrap().units as usize * 2);
 
-    let unit_ids = store.unit_ids(first.repo_id).unwrap();
-    let readme_id = store
-        .source_by_locator(first.repo_id, "README.md")
-        .unwrap()
-        .unwrap()
-        .id;
+    let unit_ids = store.unit_ids().unwrap();
+    let readme_id = store.source_by_locator("README.md").unwrap().unwrap().id;
     let second =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(second.changed_sources, 0);
     assert_eq!(second.unchanged_sources, 2);
     assert_eq!(second.embedded, 0);
-    assert_eq!(store.unit_ids(first.repo_id).unwrap(), unit_ids);
+    assert_eq!(store.unit_ids().unwrap(), unit_ids);
     assert_eq!(
-        store
-            .source_by_locator(first.repo_id, "README.md")
-            .unwrap()
-            .unwrap()
-            .id,
+        store.source_by_locator("README.md").unwrap().unwrap().id,
         readme_id
     );
 
     let dual = query(
         &store,
-        first.repo_id,
         Some(&embedder),
         "authentication token session",
         &QueryOptions {
@@ -104,7 +95,6 @@ fn indexes_incrementally_and_queries_four_channels() {
         .any(|item| item.evidence_text.contains("refresh_session")));
     let repeated = query(
         &store,
-        first.repo_id,
         Some(&embedder),
         "authentication token session",
         &QueryOptions {
@@ -148,9 +138,7 @@ fn index_format_version_forces_a_rebuild() {
     let embedder = MockEmbedder::new("mock-v1");
     let first =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    store
-        .set_repository_content_version(first.repo_id, "obsolete")
-        .unwrap();
+    store.set_repository_content_version("obsolete").unwrap();
     let rebuilt =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(rebuilt.changed_sources, 2);
@@ -173,7 +161,6 @@ fn deterministic_routing_changes_the_top_one_on_a_vocabulary_fixture() {
     };
     let baseline = query(
         &store,
-        indexed.repo_id,
         Some(&embedder),
         "authentication token session",
         &options(QueryChannels::evidence_only()),
@@ -181,7 +168,6 @@ fn deterministic_routing_changes_the_top_one_on_a_vocabulary_fixture() {
     .unwrap();
     let dual = query(
         &store,
-        indexed.repo_id,
         Some(&embedder),
         "authentication token session",
         &options(QueryChannels::for_embedder(Some(&embedder))),

@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::{AnchorKind, BuiltAnchor, BuiltUnit, ResolvedAnchor, UnitKind};
+use crate::core::{AnchorKind, BuiltAnchor, BuiltUnit, ResolvedAnchor, SourceKind, UnitKind};
 use crate::ingest::{index_repository_bounded, LockedError};
 use rusqlite::OptionalExtension;
 
@@ -26,7 +26,6 @@ fn file_anchor(path: &str) -> BuiltAnchor {
 fn commit_units(store: &mut Store, locator: &str, units: &[BuiltUnit]) -> CommitOutcome {
     store
         .commit_source(SourceIngest {
-            repo_id: RepoId(1),
             kind: SourceKind::Code,
             locator,
             content_hash: "source-hash",
@@ -50,7 +49,7 @@ fn migrations_are_idempotent_and_vec_loads() {
         .connection()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let busy_timeout: i64 = store
         .connection()
         .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
@@ -127,6 +126,19 @@ fn version_one_databases_migrate_to_unified_anchors() {
             anchor_kind TEXT NOT NULL, anchor_id INTEGER NOT NULL,
             relationship TEXT NOT NULL, confidence_source TEXT NOT NULL,
             PRIMARY KEY (unit_id, anchor_kind, anchor_id, relationship));
+        CREATE TABLE vectors (unit_id INTEGER NOT NULL REFERENCES retrieval_units(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL, model_version TEXT NOT NULL, dimensions INTEGER NOT NULL,
+            vector BLOB NOT NULL, PRIMARY KEY(unit_id, kind, model_version));
+        CREATE TABLE index_runs (id INTEGER PRIMARY KEY,
+            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL,
+            changed_sources INTEGER NOT NULL, unchanged_sources INTEGER NOT NULL,
+            deleted_sources INTEGER NOT NULL, units_added INTEGER NOT NULL,
+            units_reused INTEGER NOT NULL, units_removed INTEGER NOT NULL,
+            embedded INTEGER NOT NULL, status TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE index_leases (repo_id INTEGER PRIMARY KEY,
+            owner TEXT NOT NULL, expires_at INTEGER NOT NULL);
         INSERT INTO repositories(id, root_path) VALUES (1, '/repo');
         INSERT INTO sources(id, repo_id, kind, locator, content_hash)
             VALUES (10, 1, 'code', 'src/main.rs', 'h');
@@ -153,7 +165,7 @@ fn version_one_databases_migrate_to_unified_anchors() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     // Unit ids survive the migration untouched.
     let unit_id: i64 = conn
         .query_row("SELECT id FROM retrieval_units", [], |row| row.get(0))
@@ -186,7 +198,7 @@ fn version_one_databases_migrate_to_unified_anchors() {
 #[test]
 fn unit_anchors_are_rebuilt_not_merged_on_recommit() {
     let mut store = Store::open_in_memory().unwrap();
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     commit_units(
         &mut store,
         "src/a.rs",
@@ -196,9 +208,7 @@ fn unit_anchors_are_rebuilt_not_merged_on_recommit() {
             vec![file_anchor("src/a.rs")],
         )],
     );
-    let unit_id = store.units_for_source(RepoId(1), "src/a.rs").unwrap()[0]
-        .id
-        .0;
+    let unit_id = store.units_for_source("src/a.rs").unwrap()[0].id.0;
 
     // Same content hash reuses the unit, but the anchor set must be replaced.
     commit_units(
@@ -218,7 +228,7 @@ fn unit_anchors_are_rebuilt_not_merged_on_recommit() {
 #[test]
 fn anchors_resolve_kind_value_and_relationship() {
     let mut store = Store::open_in_memory().unwrap();
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     commit_units(
         &mut store,
         "src/a.rs",
@@ -235,9 +245,7 @@ fn anchors_resolve_kind_value_and_relationship() {
             ],
         )],
     );
-    let unit_id = store.units_for_source(RepoId(1), "src/a.rs").unwrap()[0]
-        .id
-        .0;
+    let unit_id = store.units_for_source("src/a.rs").unwrap()[0].id.0;
     let anchors = store.anchors_for_unit(unit_id).unwrap();
     assert_eq!(
         anchors,
@@ -255,28 +263,22 @@ fn anchors_resolve_kind_value_and_relationship() {
         ]
     );
     assert_eq!(
-        store
-            .units_for_anchor(RepoId(1), "file", "src/a.rs", 10)
-            .unwrap(),
+        store.units_for_anchor("file", "src/a.rs", 10).unwrap(),
         vec![unit_id]
     );
-    assert!(store
-        .units_for_anchor(RepoId(1), "bogus", "x", 10)
-        .unwrap()
-        .is_empty());
+    assert!(store.units_for_anchor("bogus", "x", 10).unwrap().is_empty());
 }
 
 #[test]
 fn vector_models_lists_per_model_counts() {
     let mut store = Store::open_in_memory().unwrap();
-    let repo = RepoId(1);
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     let unit_ids = commit_units(
         &mut store,
         "src/a.rs",
         &[unit(UnitKind::Code, "evidence", Vec::new())],
     );
-    let unit_id = store.units_for_source(repo, "src/a.rs").unwrap()[0].id.0;
+    let unit_id = store.units_for_source("src/a.rs").unwrap()[0].id.0;
     assert_eq!(unit_ids.units_added, 1);
     store
         .put_vector(unit_id, "evidence", "mock-v1", &[0.1, 0.2])
@@ -293,7 +295,7 @@ fn vector_models_lists_per_model_counts() {
         )
         .unwrap();
     assert_eq!(
-        store.vector_models(repo).unwrap(),
+        store.vector_models().unwrap(),
         vec![
             ("Qwen3-Embedding-0.6B-Q8_0".to_string(), 1),
             ("mock-v1".to_string(), 2),
@@ -316,7 +318,6 @@ fn routing_unit(routing_text: &str) -> BuiltUnit {
 fn commit_routing_unit(store: &mut Store, unit: &BuiltUnit) {
     store
         .commit_source(SourceIngest {
-            repo_id: RepoId(1),
             kind: SourceKind::Text,
             locator: "snoop://routed",
             content_hash: "source-hash",
@@ -330,12 +331,9 @@ fn commit_routing_unit(store: &mut Store, unit: &BuiltUnit) {
 #[test]
 fn reused_unit_with_changed_routing_text_loses_stale_routing_vectors() {
     let mut store = Store::open_in_memory().unwrap();
-    let repo = RepoId(1);
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
     commit_routing_unit(&mut store, &routing_unit("old routing text"));
-    let unit_id = store.units_for_source(repo, "snoop://routed").unwrap()[0]
-        .id
-        .0;
+    let unit_id = store.units_for_source("snoop://routed").unwrap()[0].id.0;
     store
         .put_vector(unit_id, "routing", "m1", &[0.1, 0.2])
         .unwrap();
@@ -344,7 +342,7 @@ fn reused_unit_with_changed_routing_text_loses_stale_routing_vectors() {
         .unwrap();
 
     commit_routing_unit(&mut store, &routing_unit("fresh routing text"));
-    let reloaded = store.units_for_source(repo, "snoop://routed").unwrap();
+    let reloaded = store.units_for_source("snoop://routed").unwrap();
     assert_eq!(reloaded.len(), 1);
     assert_eq!(reloaded[0].id.0, unit_id, "hash reuse keeps the unit id");
     assert_eq!(reloaded[0].routing_text, "fresh routing text");
@@ -362,7 +360,7 @@ fn reused_unit_with_changed_routing_text_loses_stale_routing_vectors() {
             .is_some(),
         "unchanged evidence text keeps its vector"
     );
-    let missing = store.units_missing_vectors(repo, "routing", "m1").unwrap();
+    let missing = store.units_missing_vectors("routing", "m1").unwrap();
     assert_eq!(
         missing,
         vec![(unit_id, "fresh routing text".to_string())],
@@ -381,7 +379,7 @@ fn reused_unit_with_changed_routing_text_loses_stale_routing_vectors() {
         "an unchanged routing text never deletes vectors"
     );
     assert!(store
-        .units_missing_vectors(repo, "routing", "m1")
+        .units_missing_vectors("routing", "m1")
         .unwrap()
         .is_empty());
 }
@@ -421,7 +419,7 @@ fn concurrent_migration_of_a_shared_fresh_database_succeeds() {
         .connection()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
 }
 
 #[test]
@@ -430,35 +428,31 @@ fn dropped_transaction_writes_nothing() {
     let transaction = store.conn.transaction().unwrap();
     transaction
         .execute(
-            "INSERT INTO repositories(root_path) VALUES ('/tmp/repo')",
+            "INSERT INTO sources(kind, locator, content_hash) VALUES ('code', 'x.rs', 'h')",
             [],
         )
         .unwrap();
     drop(transaction);
-    assert_eq!(store.stats().unwrap().repositories, 0);
+    assert_eq!(store.stats().unwrap().sources, 0);
 }
 
 #[test]
 fn record_index_run_writes_status_and_real_started_at() {
     let store = Store::open_in_memory().unwrap();
-    let repo = RepoId(1);
-    store.ensure_repository("/repo").unwrap();
+    store.bind_repository("/repo").unwrap();
 
     store
-        .record_index_run(
-            repo,
-            &IndexRunStats {
-                changed_sources: 2,
-                duration_ms: 5000,
-                ..Default::default()
-            },
-        )
+        .record_index_run(&IndexRunStats {
+            changed_sources: 2,
+            duration_ms: 5000,
+            ..Default::default()
+        })
         .unwrap();
     let (started_at, finished_at, status): (i64, i64, String) = store
         .connection()
         .query_row(
-            "SELECT started_at,finished_at,status FROM index_runs WHERE repo_id=?1",
-            params![repo.0],
+            "SELECT started_at,finished_at,status FROM index_runs ORDER BY id ASC LIMIT 1",
+            [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
@@ -470,17 +464,14 @@ fn record_index_run_writes_status_and_real_started_at() {
     );
 
     store
-        .record_index_run(
-            repo,
-            &IndexRunStats {
-                status: IndexRunStatus::Timeout,
-                duration_ms: 300_000,
-                ..Default::default()
-            },
-        )
+        .record_index_run(&IndexRunStats {
+            status: IndexRunStatus::Timeout,
+            duration_ms: 300_000,
+            ..Default::default()
+        })
         .unwrap();
     let run = store
-        .stats_for_repo(repo)
+        .stats()
         .unwrap()
         .last_index_run
         .expect("latest run is surfaced");
@@ -500,9 +491,9 @@ fn locked_refusal_is_typed_writes_no_run_row_and_keeps_holder() {
     .unwrap();
 
     let mut store = Store::open_in_memory().unwrap();
-    let repository = store.ensure_repository(&root.to_string_lossy()).unwrap();
-    assert!(store.acquire_lease(repository.id, "blocker", 3600).unwrap());
-    let runs_before = store.stats_for_repo(repository.id).unwrap().index_runs;
+    store.bind_repository(&root.to_string_lossy()).unwrap();
+    assert!(store.acquire_lease("blocker", 3600).unwrap());
+    let runs_before = store.stats().unwrap().index_runs;
 
     let error = index_repository_bounded(&mut store, &root, None, None).unwrap_err();
     assert!(
@@ -510,10 +501,10 @@ fn locked_refusal_is_typed_writes_no_run_row_and_keeps_holder() {
         "the refusal must be the typed LockedError, got: {error}"
     );
     assert_eq!(
-        store.stats_for_repo(repository.id).unwrap().index_runs,
+        store.stats().unwrap().index_runs,
         runs_before,
         "a Locked refusal writes no index_runs row"
     );
-    let (owner, _) = super::leases::lease_row(&store, repository.id).unwrap();
+    let (owner, _) = super::leases::lease_row(&store).unwrap();
     assert_eq!(owner, "blocker", "the holder's lease is untouched");
 }
