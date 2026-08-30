@@ -38,7 +38,7 @@ use rust::{rust_atomic, rust_interesting, rust_is_import, rust_leading_context, 
 use shell::{shell_atomic, shell_interesting, shell_is_import, shell_leading_context};
 
 pub use registry::{
-    code_extension, language_for, language_for_source, language_name, supports_code_path, Language,
+    code_extension, language_for_source, language_name, supports_code_path, Language,
 };
 
 /// One symbol identity: the rendered name and the qualified breadcrumb

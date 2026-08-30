@@ -54,8 +54,9 @@ fn is_source_command(node: Node<'_>, source: &str) -> bool {
     // The path argument must be a literal word or string; a `$`
     // expansion is dynamic and stays unrecognized.
     let mut cursor = node.walk();
-    node.named_children(&mut cursor)
+    let path = node
+        .named_children(&mut cursor)
         .find(|child| child.kind() == "word" || child.kind() == "string")
-        .map(|argument| source[argument.byte_range()].trim())
-        .is_some_and(|path| !path.is_empty() && !path.contains('$'))
+        .map(|argument| source[argument.byte_range()].trim());
+    path.is_some_and(|path| !path.is_empty() && !path.contains('$'))
 }

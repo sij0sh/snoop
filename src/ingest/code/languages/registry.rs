@@ -215,7 +215,7 @@ fn shebang_key(source: &str) -> Option<&'static str> {
                 .iter()
                 .any(|token| body.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| part == *token))
         })
-        .map(|(name, _)| name)
+        .map(|(name, _)| *name)
 }
 
 fn build_language(key: &'static str) -> Option<Language> {
