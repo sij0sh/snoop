@@ -14,6 +14,11 @@ const IMPORT_NODE_KINDS: &[&str] = &[
 ];
 
 fn is_import_atom(atom: &ParsedAtom) -> bool {
+    // Adapters own import detection; fall back to node kinds for atoms
+    // produced before the callback existed.
+    if let Some(flag) = atom.metadata["is_import"].as_bool() {
+        return flag;
+    }
     atom.metadata["node_kind"]
         .as_str()
         .is_some_and(|kind| IMPORT_NODE_KINDS.contains(&kind))
@@ -83,22 +88,38 @@ fn shell_evidence(atoms: &[ParsedAtom], index: usize, children: &[usize]) -> Str
         evidence.push_str(&header);
         evidence.push('\n');
     }
-    for child in children {
-        let signature = atoms[*child].metadata["signature"]
+    for (position, child) in children.iter().enumerate() {
+        let child_atom = &atoms[*child];
+        let signature = child_atom.metadata["signature"]
             .as_str()
             .unwrap_or_default();
         let line = signature.split('{').next().unwrap_or(signature).trim();
         if line.is_empty() {
-            let name = atoms[*child]
-                .breadcrumb
-                .rsplit(" > ")
-                .next()
-                .unwrap_or_default();
+            let name = child_atom.breadcrumb.rsplit(" > ").next().unwrap_or_default();
             evidence.push_str(name);
         } else {
             evidence.push_str(line);
         }
         evidence.push('\n');
+        // Preserve the text between this child and the next one so
+        // scripts keep their top-level orchestration visible.
+        let next_start = children
+            .get(position + 1)
+            .map(|next| atoms[*next].start_offset)
+            .unwrap_or(atom.end_offset);
+        let gap_start = child_atom.end_offset.saturating_sub(atom.start_offset);
+        let gap_end = next_start
+            .saturating_sub(atom.start_offset)
+            .min(atom.text.len());
+        if gap_start < gap_end {
+            if let Some(gap) = atom.text.get(gap_start..gap_end) {
+                let gap = gap.trim();
+                if !gap.is_empty() {
+                    evidence.push_str(gap);
+                    evidence.push('\n');
+                }
+            }
+        }
     }
     evidence
 }
