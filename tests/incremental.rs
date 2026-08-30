@@ -59,7 +59,8 @@ fn git_incremental_indexes_only_new_commits() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let first = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let first =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(count_kind(&store, first.repo_id, SourceKind::GitCommit), 1);
     let git_sources_after_first = store.git_commit_locators(first.repo_id).unwrap();
     assert_eq!(git_sources_after_first.len(), 1);
@@ -75,7 +76,8 @@ fn git_incremental_indexes_only_new_commits() {
         &["commit", "--quiet", "-m", "second: token rotation"],
     );
 
-    let second = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let second =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
         count_kind(&store, second.repo_id, SourceKind::GitCommit),
         2,
@@ -118,13 +120,15 @@ fn git_force_rebuild_walks_all_commits() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let first = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let first =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(count_kind(&store, first.repo_id, SourceKind::GitCommit), 2);
 
     store
         .set_repository_content_version(first.repo_id, "stale-version")
         .unwrap();
-    let rebuilt = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let rebuilt =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
         count_kind(&store, rebuilt.repo_id, SourceKind::GitCommit),
         2,
@@ -198,7 +202,8 @@ fn session_append_reembeds_only_new_episodes() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let first = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let first =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
         count_kind(&store, first.repo_id, SourceKind::AgentSession),
         1
@@ -209,7 +214,8 @@ fn session_append_reembeds_only_new_episodes() {
     appended.extend_from_slice(SESSION_APPEND);
     std::fs::write(&session_path, appended.join("\n") + "\n").unwrap();
 
-    let second = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let second =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
         count_kind(&store, second.repo_id, SourceKind::AgentSession),
         2,
@@ -227,4 +233,54 @@ fn session_append_reembeds_only_new_episodes() {
     );
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
+}
+
+#[test]
+fn timed_out_rebuild_does_not_mark_format_current() {
+    let _guard = env_lock();
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(directory.path().join("src")).unwrap();
+    std::fs::write(
+        directory.path().join("src/auth.rs"),
+        "pub fn refresh_session() {}\n",
+    )
+    .unwrap();
+    git(directory.path(), &["init", "--quiet"]);
+    git(directory.path(), &["add", "."]);
+    git(
+        directory.path(),
+        &["commit", "--quiet", "-m", "first: introduce refresh"],
+    );
+
+    let mut store = Store::open_in_memory().unwrap();
+    let embedder = MockEmbedder::new("mock-v1");
+    let first =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+
+    store
+        .set_repository_content_version(first.repo_id, "stale-version")
+        .unwrap();
+    let expired = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), Some(expired))
+            .unwrap();
+    assert!(outcome.timed_out);
+
+    let repository = store
+        .first_repository()
+        .unwrap()
+        .expect("repository exists");
+    assert_eq!(repository.content_version, "stale-version");
+
+    let retry =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    assert!(!retry.timed_out);
+    let repository = store
+        .first_repository()
+        .unwrap()
+        .expect("repository exists");
+    assert_eq!(
+        repository.content_version,
+        snoop::ingest::INDEX_FORMAT_VERSION
+    );
 }

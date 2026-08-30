@@ -185,8 +185,7 @@ fn index_repository_body(
             outcome.units_reused += committed.units_reused;
             outcome.units_removed += committed.units_removed;
         }
-        
-        
+
         if let Some(newest) = newest_tip {
             if !outcome.timed_out {
                 store.set_repository_git_tip(repository.id, &newest)?;
@@ -311,10 +310,14 @@ fn index_repository_body(
         outcome.units_removed += committed.units_removed;
     }
 
+    // The format version advances only after the complete source rebuild
+    // finished inside the deadline. An embedding-only timeout keeps the
+    // version current so the next run resumes embedding instead of
+    // rebuilding sources.
     if !outcome.timed_out {
         outcome.deleted_sources = store.delete_sources_not_in(repository.id, &present)?;
+        store.set_repository_content_version(repository.id, INDEX_FORMAT_VERSION)?;
     }
-    store.set_repository_content_version(repository.id, INDEX_FORMAT_VERSION)?;
     if !outcome.timed_out {
         if let Some(embedder) = embedder {
             let (embedded, embeddings_timed_out) =
