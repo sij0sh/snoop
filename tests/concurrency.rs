@@ -94,11 +94,17 @@ fn cold_start_overlap_admits_exactly_one_indexer() {
         .spawn()
         .unwrap();
 
-    // Gate on the winner's lease row, not on timing.
+    // Gate on the winner's lease row, then freeze the winner mid-index so
+    // its lease stays live until the contender has been refused. Indexing
+    // is fast enough with mock embeddings that a pure timing race is flaky.
     assert!(
         wait_for_lease(&db, LEASE_GATE),
         "first ensure never acquired the index lease"
     );
+    Command::new("kill")
+        .args(["-STOP", &winner.id().to_string()])
+        .output()
+        .unwrap();
 
     let contender = run_ensure(binary, &repo, &db);
     assert!(
@@ -110,6 +116,11 @@ fn cold_start_overlap_admits_exactly_one_indexer() {
         contender.1["status"], "locked",
         "the contender must see the winner's live lease"
     );
+
+    Command::new("kill")
+        .args(["-CONT", &winner.id().to_string()])
+        .output()
+        .unwrap();
 
     let winner_out = winner.wait_with_output().unwrap();
     assert!(
