@@ -8,7 +8,7 @@ use super::align::{
     Hunk,
 };
 use super::anchors::{git_anchors, git_routing};
-use super::history::{blob, changed_files, parent_oid, CommitRef};
+use super::history::{changed_files, parent_oid, BlobReader, CommitRef};
 use super::MAX_HUNKS_PER_FILE;
 
 const GIT_UNIT_VERSION: &str = "git-unit-v3";
@@ -141,6 +141,11 @@ pub fn ingest_commit(
     commit: &CommitRef,
 ) -> Result<Vec<BuiltUnit>, Box<dyn std::error::Error + Send + Sync>> {
     let files = changed_files(root, &commit.oid)?;
+    // Finding 3 (audit 20260830195149-6f1a96a5): the parent revision and the
+    // blob channel are loop-invariant; resolve both once per commit (was one
+    // parent_oid spawn per file plus two blob spawns per supported file).
+    let parent = parent_oid(root, &commit.oid);
+    let mut blobs = BlobReader::spawn(root)?;
     let short = commit
         .oid
         .get(..8)
@@ -248,7 +253,6 @@ pub fn ingest_commit(
             || crate::ingest::code::supports_code_path(&old_path);
         let language = crate::ingest::code::language_name(&file.path)
             .or_else(|| crate::ingest::code::language_name(&old_path));
-        let parent = parent_oid(root, &commit.oid);
         let aligned: Vec<Alignment> = if hunks.is_empty() {
             vec![Alignment {
                 old_span: None,
@@ -265,13 +269,13 @@ pub fn ingest_commit(
         } else if supported {
             let before = parent
                 .as_deref()
-                .and_then(|revision| blob(root, revision, &old_path))
+                .and_then(|revision| blobs.read(revision, &old_path))
                 .filter(|content| content.len() <= MAX_ALIGN_BYTES)
                 .unwrap_or_default();
             let after = if file.status == 'D' {
                 String::new()
             } else {
-                blob(root, &commit.oid, &file.path)
+                blobs.read(&commit.oid, &file.path)
                     .filter(|content| content.len() <= MAX_ALIGN_BYTES)
                     .unwrap_or_default()
             };

@@ -1,6 +1,14 @@
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::hash_segments;
+
+// Scaling-guard counter (computational-scaling-audit 20260830195149-6f1a96a5,
+// finding 3). Invariant: spawns per ingest run <= 4C + k0, independent of
+// files-per-commit F (was exactly 4F + 1 per commit).
+pub(crate) static GIT_SPAWNS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct CommitRef {
@@ -11,6 +19,7 @@ pub struct CommitRef {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    GIT_SPAWNS.fetch_add(1, Ordering::Relaxed);
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
@@ -109,7 +118,7 @@ pub(super) fn changed_files(
     root: &Path,
     oid: &str,
 ) -> Result<Vec<ChangedFile>, Box<dyn std::error::Error + Send + Sync>> {
-    let out = git(
+    let status_out = git(
         root,
         &[
             "diff-tree",
@@ -121,12 +130,57 @@ pub(super) fn changed_files(
             oid,
         ],
     )?;
-    let mut files = Vec::new();
-    for line in out.lines() {
-        if line.trim().is_empty() {
-            continue;
+    // Finding 3 (audit 20260830195149-6f1a96a5): one batched patch per
+    // commit instead of one diff-tree spawn per changed file. git emits
+    // name-status rows and patch headers in the same tree order, so the two
+    // outputs pair positionally; patch bodies cannot contain a "diff --git"
+    // line at column 0 (body lines start with ' ', '+', '-', or '@').
+    let patch_out = git(
+        root,
+        &[
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "-p",
+            "-M",
+            "--no-ext-diff",
+            "-U3",
+            oid,
+        ],
+    )?;
+    let mut patches: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in patch_out.lines() {
+        if line.starts_with("diff --git ") {
+            if let Some(patch) = current.take() {
+                patches.push(patch);
+            }
+            current = Some(String::new());
         }
-        let mut fields = line.split('\t');
+        if let Some(patch) = current.as_mut() {
+            patch.push_str(line);
+            patch.push('\n');
+        }
+    }
+    if let Some(patch) = current.take() {
+        patches.push(patch);
+    }
+
+    let status_rows: Vec<&str> = status_out
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if status_rows.len() != patches.len() {
+        return Err(format!(
+            "git diff-tree {oid}: {} name-status rows but {} patch files",
+            status_rows.len(),
+            patches.len()
+        )
+        .into());
+    }
+    let mut files = Vec::new();
+    for (status_field, patch) in status_rows.into_iter().zip(patches) {
+        let mut fields = status_field.split('\t');
         let Some(status_field) = fields.next() else {
             continue;
         };
@@ -139,25 +193,7 @@ pub(super) fn changed_files(
             let (Some(old_path), Some(new_path)) = (fields.next(), fields.next()) else {
                 continue;
             };
-            if old_path.is_empty() || new_path.is_empty() {
-                continue;
-            }
-            let patch = git(
-                root,
-                &[
-                    "diff-tree",
-                    "--root",
-                    "-p",
-                    "-M",
-                    "--no-ext-diff",
-                    "-U3",
-                    oid,
-                    "--",
-                    old_path,
-                    new_path,
-                ],
-            )?;
-            if patch.trim().is_empty() {
+            if old_path.is_empty() || new_path.is_empty() || patch.trim().is_empty() {
                 continue;
             }
             files.push(ChangedFile {
@@ -170,23 +206,7 @@ pub(super) fn changed_files(
             let Some(path) = fields.next() else {
                 continue;
             };
-            if path.is_empty() {
-                continue;
-            }
-            let patch = git(
-                root,
-                &[
-                    "diff-tree",
-                    "--root",
-                    "-p",
-                    "--no-ext-diff",
-                    "-U3",
-                    oid,
-                    "--",
-                    path,
-                ],
-            )?;
-            if patch.trim().is_empty() {
+            if path.is_empty() || patch.trim().is_empty() {
                 continue;
             }
             files.push(ChangedFile {
@@ -200,11 +220,94 @@ pub(super) fn changed_files(
     Ok(files)
 }
 
-pub(super) fn blob(root: &Path, rev: &str, path: &str) -> Option<String> {
-    let rev_path = format!("{rev}:{path}");
-    git(root, &["show", &rev_path])
-        .ok()
-        .filter(|content| !content.contains('\0'))
+/// Long-lived `git cat-file --batch` session (audit finding 3): one spawned
+/// process answers every blob read of a commit instead of two `git show`
+/// spawns per supported file. Responses are read sequentially, one request
+/// in flight at a time.
+pub(super) struct BlobReader {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    broken: bool,
+}
+
+impl BlobReader {
+    pub(super) fn spawn(root: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        GIT_SPAWNS.fetch_add(1, Ordering::Relaxed);
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["-c", "core.quotepath=false", "cat-file", "--batch"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("git cat-file spawn failed: {error}"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or("git cat-file stdin unavailable")?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("git cat-file stdout unavailable")?;
+        Ok(Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            broken: false,
+        })
+    }
+
+    /// Blob contents for `rev:path`; `None` for missing or binary blobs —
+    /// the same contract as the `git show` helper it replaces.
+    pub(super) fn read(&mut self, rev: &str, path: &str) -> Option<String> {
+        if self.broken {
+            return None;
+        }
+        if self
+            .stdin
+            .write_all(format!("{rev}:{path}\n").as_bytes())
+            .is_err()
+            || self.stdin.flush().is_err()
+        {
+            self.broken = true;
+            return None;
+        }
+        let mut header = String::new();
+        if self.stdout.read_line(&mut header).is_err() || header.trim().is_empty() {
+            self.broken = true;
+            return None;
+        }
+        let mut fields = header.split_whitespace();
+        let kind = fields.nth(1);
+        let size = fields.next().and_then(|size| size.parse::<usize>().ok());
+        let (Some("blob"), Some(size)) = (kind, size) else {
+            // "missing" reply or non-blob object: same as the old None.
+            return None;
+        };
+        let mut bytes = vec![0u8; size];
+        if self.stdout.read_exact(&mut bytes).is_err() {
+            self.broken = true;
+            return None;
+        }
+        let mut trailing = [0u8; 1];
+        if self.stdout.read_exact(&mut trailing).is_err() {
+            self.broken = true;
+            return None;
+        }
+        if bytes.contains(&0) {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+impl Drop for BlobReader {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 pub(super) fn parent_oid(root: &Path, oid: &str) -> Option<String> {

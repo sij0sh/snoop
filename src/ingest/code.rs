@@ -2,6 +2,12 @@ use std::collections::BTreeSet;
 use std::ops::{Range, RangeInclusive};
 
 use tree_sitter::{Node, Parser};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Scaling-guard counter (computational-scaling-audit 20260830195149-6f1a96a5,
+// finding 2). Invariant: bytes scanned per analyze_code <= 2 x S_f for flat
+// symbol layout (was Theta(A' x S_f) prefix rescans).
+pub(crate) static LINE_SCAN_BYTES: AtomicU64 = AtomicU64::new(0);
 
 use crate::core::{AtomKind, ParsedAtom};
 use crate::metadata::chunk_segments::ChunkSegment;
@@ -275,13 +281,41 @@ fn legal_segments(
     segments
 }
 
-fn line_of(source: &str, byte: usize) -> u32 {
-    let capped = byte.min(source.len());
-    source.as_bytes()[..capped]
-        .iter()
-        .filter(|&&byte| byte == b'\n')
-        .count() as u32
-        + 1
+/// Monotone (byte, line) cursor (audit finding 2): one forward pass per
+/// analyze_code computes every symbol boundary's line instead of recounting
+/// newlines from byte 0 per boundary. Boundary bytes arrive in ascending
+/// order (tree-sitter pre-order); a non-ascending boundary (nested atom
+/// queried after its parent's end) restarts the scan from byte 0.
+struct LineCursor<'a> {
+    source: &'a [u8],
+    byte: usize,
+    line: u32,
+}
+
+impl<'a> LineCursor<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            source: source.as_bytes(),
+            byte: 0,
+            line: 1,
+        }
+    }
+
+    fn line_of(&mut self, byte: usize) -> u32 {
+        let capped = byte.min(self.source.len());
+        if capped < self.byte {
+            self.byte = 0;
+            self.line = 1;
+        }
+        let newlines = self.source[self.byte..capped]
+            .iter()
+            .filter(|&&byte| byte == b'\n')
+            .count() as u32;
+        LINE_SCAN_BYTES.fetch_add((capped - self.byte) as u64, Ordering::Relaxed);
+        self.line += newlines;
+        self.byte = capped;
+        self.line
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -312,6 +346,7 @@ fn boundaries_from_atoms(path: &str, source: &str, atoms: &[ParsedAtom]) -> Vec<
         .unwrap_or("unknown")
         .to_string();
     let prefix = format!("{path} > ");
+    let mut cursor = LineCursor::new(source);
     atoms
         .iter()
         .filter(|atom| {
@@ -349,9 +384,8 @@ fn boundaries_from_atoms(path: &str, source: &str, atoms: &[ParsedAtom]) -> Vec<
                     .filter(|signature| !signature.is_empty()),
                 parent_symbol_id,
                 byte_range: atom.start_offset..atom.end_offset,
-                line_range: line_of(source, atom.start_offset)
-                    ..=line_of(
-                        source,
+                line_range: cursor.line_of(atom.start_offset)
+                    ..=cursor.line_of(
                         atom.end_offset.saturating_sub(1).max(atom.start_offset),
                     ),
                 leading_context,

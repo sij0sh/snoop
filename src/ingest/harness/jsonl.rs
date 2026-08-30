@@ -328,6 +328,12 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
     let mut turns: Vec<EpisodeTurn> = Vec::new();
     let mut current: Option<EpisodeTurn> = None;
     let mut pending_bash: HashMap<String, String> = HashMap::new();
+    // Finding 5 (audit 20260830195149-6f1a96a5): id -> index of the ToolCall
+    // event pushed into the current turn. Results attach O(1) through this
+    // map instead of rescanning turn.events backwards (was Theta(R x
+    // E_turn); parallel-call shape was exactly m^2 scan steps). Reset with
+    // every new turn, so a stale id misses exactly like the old scan miss.
+    let mut call_event_index: HashMap<String, usize> = HashMap::new();
     let mut byte_offset = 0usize;
 
     for line in content.split_inclusive('\n') {
@@ -372,6 +378,7 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                         outcome: None,
                     }],
                 });
+                call_event_index.clear();
             }
             "assistant" => {
                 for block in message
@@ -414,6 +421,7 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                         timestamp,
                         events: Vec::new(),
                     });
+                    call_event_index.clear();
                 }
                 let turn = current.as_mut().unwrap();
                 if !text.is_empty() {
@@ -437,6 +445,7 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                         files: tool.files,
                         outcome: tool.command.map(|command| BashOutcome::unknown(command)),
                     });
+                    call_event_index.insert(call_id, turn.events.len() - 1);
                 }
             }
             "toolResult" => {
@@ -454,12 +463,12 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                 if is_bash {
                     // The structured result upgrades the call's unknown outcome.
                     if let (Some(turn), Some(call_id)) = (current.as_mut(), call_id.as_deref()) {
-                        if let Some(call) =
-                            turn.events.iter_mut().rev().find(|event| {
-                                event.kind == EventKind::ToolCall && event.id == call_id
-                            })
-                        {
-                            call.outcome = bash_outcome_from_content(&message.content, command);
+                        if let Some(&index) = call_event_index.get(call_id) {
+                            let call = &mut turn.events[index];
+                            if call.kind == EventKind::ToolCall && call.id == call_id {
+                                call.outcome =
+                                    bash_outcome_from_content(&message.content, command);
+                            }
                         }
                     }
                 }

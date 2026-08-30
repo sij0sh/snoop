@@ -262,6 +262,14 @@ impl Store {
             params![source_id],
         )?;
 
+        // Finding 4 (audit 20260830195149-6f1a96a5): relocate reused rows
+        // through an id map instead of a linear scan per reused unit (was
+        // Theta(U_reused x U_old), exact U(U+1)/2 dense scans).
+        let old_row_by_id: HashMap<i64, usize> = old_units
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _, _, _))| (*id, index))
+            .collect();
         let mut available: HashMap<String, VecDeque<i64>> = HashMap::new();
         for (id, hash, _, _) in &old_units {
             available.entry(hash.clone()).or_default().push_back(*id);
@@ -275,10 +283,10 @@ impl Store {
                 .get_mut(&unit.content_hash)
                 .and_then(VecDeque::pop_front)
             {
-                let old_row = old_units
-                    .iter()
-                    .find(|(old_id, _, _, _)| *old_id == id)
+                let old_row_index = *old_row_by_id
+                    .get(&id)
                     .expect("reused unit id comes from the previous rows");
+                let old_row = &old_units[old_row_index];
                 transaction.execute(
                     "UPDATE retrieval_units SET kind=?2, evidence_text=?3, routing_text=?4,
                      token_count=?5, metadata=?6, timestamp=?7 WHERE id=?1",

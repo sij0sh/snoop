@@ -1,4 +1,17 @@
 use crate::core::AtomKind;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Scaling-guard counters (computational-scaling-audit 20260830195149-6f1a96a5,
+// finding 1). Closed forms after repair: RENAME_LEN_CHECKS + RENAME_BODY_COMPARES
+// stay Theta(G_new) (was Theta(G_new x G_old)); SPAN_BODY_BYTES stays
+// Theta((G_new + G_old) x S_f) (was Theta(G_new x G_old x S_f)).
+pub(super) static RENAME_LEN_CHECKS: AtomicU64 = AtomicU64::new(0);
+pub(super) static RENAME_BODY_COMPARES: AtomicU64 = AtomicU64::new(0);
+pub(super) static SPAN_BODY_BYTES: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChangeKind {
@@ -313,20 +326,40 @@ pub(super) struct Alignment {
 fn span_body(source: &str, span: &SymbolSpan) -> String {
     let start = span.start_line.saturating_sub(1) as usize;
     let end = span.end_line as usize;
-    source
+    // take(end - start) covers start_line..=end_line exactly; the previous
+    // `+ 1` overran by one line and made every true rename fail except the
+    // file's last function (audit decision D1).
+    let body = source
         .lines()
         .skip(start)
-        .take(end.saturating_sub(start) + 1)
+        .take(end.saturating_sub(start))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    SPAN_BODY_BYTES.fetch_add(body.len() as u64, Ordering::Relaxed);
+    body
 }
 
 fn matches_rename(before: &str, old_span: &SymbolSpan, after: &str, new_span: &SymbolSpan) -> bool {
+    RENAME_LEN_CHECKS.fetch_add(1, Ordering::Relaxed);
     let old_length = old_span.end_line.saturating_sub(old_span.start_line);
     let new_length = new_span.end_line.saturating_sub(new_span.start_line);
-    old_length == new_length
-        && span_body(before, old_span).replace(&old_span.name, "\u{0}")
-            == span_body(after, new_span).replace(&new_span.name, "\u{0}")
+    if old_length != new_length {
+        return false;
+    }
+    RENAME_BODY_COMPARES.fetch_add(1, Ordering::Relaxed);
+    span_body(before, old_span).replace(&old_span.name, "\u{0}")
+        == span_body(after, new_span).replace(&new_span.name, "\u{0}")
+}
+
+/// Bucket key for the rename index: (line_count, normalized-body hash).
+/// Hash equality only nominates candidates; matches_rename still verifies
+/// bodies exactly, so collisions cannot change behavior.
+fn rename_key(source: &str, span: &SymbolSpan) -> (usize, u64) {
+    let length = span.end_line.saturating_sub(span.start_line) as usize;
+    let normalized = span_body(source, span).replace(&span.name, "\u{0}");
+    let mut hasher = DefaultHasher::new();
+    normalized.hash(&mut hasher);
+    (length, hasher.finish())
 }
 
 pub(super) fn reconcile_alignments(
@@ -340,8 +373,22 @@ pub(super) fn reconcile_alignments(
 ) -> Vec<Alignment> {
     let (new_groups, new_parsed) = align_hunks(hunks, after, new_locator, Side::New);
     let (old_groups, _old_parsed) = align_hunks(hunks, before, old_locator, Side::Old);
+    // Finding 1 (audit 20260830195149-6f1a96a5): index the old side once by
+    // (line_count, body hash) so each new group only verifies its equal-key
+    // bucket instead of re-extracting every old body (was Theta(G^2 x S_f)
+    // body work + Theta(G^3) consumed_old Vec scans). Buckets keep old-index
+    // order, so the min_by_key tie-break below stays deterministic.
+    let mut rename_index: HashMap<(usize, u64), Vec<usize>> = HashMap::new();
+    for (index, (old_span, _)) in old_groups.iter().enumerate() {
+        if let Some(old_span) = old_span {
+            rename_index
+                .entry(rename_key(before, old_span))
+                .or_default()
+                .push(index);
+        }
+    }
     let mut alignments = Vec::new();
-    let mut consumed_old: Vec<usize> = Vec::new();
+    let mut consumed_old = vec![false; old_groups.len()];
 
     for (new_span, indices) in &new_groups {
         let Some(new_span) = new_span else {
@@ -362,7 +409,7 @@ pub(super) fn reconcile_alignments(
         let modified_index = old_groups
             .iter()
             .enumerate()
-            .filter(|(index, _)| !consumed_old.contains(index))
+            .filter(|(index, _)| !consumed_old[*index])
             .find(|(_, (old_span, _))| {
                 old_span.as_ref().is_some_and(|old| {
                     if file_renamed {
@@ -374,7 +421,7 @@ pub(super) fn reconcile_alignments(
             })
             .map(|(index, _)| index);
         if let Some(index) = modified_index {
-            consumed_old.push(index);
+            consumed_old[index] = true;
             alignments.push(Alignment {
                 old_span: old_groups[index].0.clone(),
                 new_span: Some(new_span.clone()),
@@ -385,25 +432,30 @@ pub(super) fn reconcile_alignments(
             });
             continue;
         }
-        let renamed_index = old_groups
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !consumed_old.contains(index))
-            .filter(|(_, (old_span, _))| {
-                old_span
-                    .as_ref()
-                    .is_some_and(|old| matches_rename(before, old, after, new_span))
-            })
-            .min_by_key(|(index, (old_span, _))| {
-                let old_start = old_span
-                    .as_ref()
-                    .map(|span| span.start_line)
-                    .unwrap_or_default();
-                (old_start.abs_diff(new_span.start_line), *index)
-            })
-            .map(|(index, _)| index);
+        let renamed_index = rename_index
+            .get(&rename_key(after, new_span))
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .copied()
+                    .filter(|index| !consumed_old[*index])
+                    .filter(|index| {
+                        old_groups[*index]
+                            .0
+                            .as_ref()
+                            .is_some_and(|old| matches_rename(before, old, after, new_span))
+                    })
+                    .min_by_key(|index| {
+                        let old_start = old_groups[*index]
+                            .0
+                            .as_ref()
+                            .map(|span| span.start_line)
+                            .unwrap_or_default();
+                        (old_start.abs_diff(new_span.start_line), *index)
+                    })
+            });
         if let Some(index) = renamed_index {
-            consumed_old.push(index);
+            consumed_old[index] = true;
             alignments.push(Alignment {
                 old_span: old_groups[index].0.clone(),
                 new_span: Some(new_span.clone()),
@@ -425,7 +477,7 @@ pub(super) fn reconcile_alignments(
     }
 
     for (index, (old_span, indices)) in old_groups.iter().enumerate() {
-        if consumed_old.contains(&index) {
+        if consumed_old[index] {
             continue;
         }
         let Some(old_span) = old_span else {
