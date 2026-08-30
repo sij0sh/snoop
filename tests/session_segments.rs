@@ -5,7 +5,7 @@ use snoop::ingest::units::MAX_TOKENS;
 const LONG_SENTENCE: &str = "Walk the auth module top down, quote every relevant span, and explain the reasoning behind each step in enough detail for a later review. ";
 
 fn long_text() -> String {
-    LONG_SENTENCE.repeat(4)
+    LONG_SENTENCE.repeat(8)
 }
 
 fn multi_cycle_session() -> String {
@@ -64,17 +64,19 @@ fn line_result(id: &str, call_id: &str, tool: &str, text: &str) -> String {
 #[test]
 fn long_session_units_stay_within_the_token_budget() {
     let units = ingest_pi_session(&multi_cycle_session(), "seg-e2e").unwrap();
-    assert_eq!(units.len(), 1, "one episode for the single user turn");
-    let unit = &units[0];
-    assert_eq!(unit.kind, UnitKind::Episode);
-    assert!(
-        unit.token_count <= MAX_TOKENS,
-        "oversized turns split: {}",
-        unit.token_count
-    );
-    assert!(unit.metadata["pieces"].as_u64().unwrap() > 1);
-    assert_eq!(unit.metadata["session"], "seg-e2e");
-    assert!(unit.routing_text.contains("session: seg-e2e"));
+    assert!(!units.is_empty(), "one episode for the single user turn");
+    for unit in &units {
+        assert_eq!(unit.kind, UnitKind::Episode);
+        assert_eq!(unit.metadata["episode"], 1);
+        assert!(
+            unit.token_count <= MAX_TOKENS,
+            "oversized turn piece exceeds budget: {}",
+            unit.token_count
+        );
+    }
+    assert!(units[0].metadata["pieces"].as_u64().unwrap() > 1);
+    assert_eq!(units[0].metadata["session"], "seg-e2e");
+    assert!(units[0].routing_text.contains("session: seg-e2e"));
 }
 
 #[test]
@@ -115,11 +117,12 @@ fn bash_outcomes_survive_the_policy_change() {
     assert_eq!(outcomes.len(), 2);
     assert_eq!(outcomes[0]["outcome"], "failed");
     assert_eq!(outcomes[1]["outcome"], "passed");
-    assert!(units[0].evidence_text.contains("Command: cargo test"));
-    assert!(units[0].evidence_text.contains("Outcome: failed"));
-    assert!(units[0].evidence_text.contains("Outcome: passed"));
-    assert!(!units[0].evidence_text.contains("three matching call sites"));
-    assert!(!units[0].evidence_text.contains("edit applied"));
+    let evidence: String = units.iter().map(|u| u.evidence_text.as_str()).collect();
+    assert!(evidence.contains("Command: cargo test"));
+    assert!(evidence.contains("Outcome: failed"));
+    assert!(evidence.contains("Outcome: passed"));
+    assert!(!evidence.contains("three matching call sites"));
+    assert!(!evidence.contains("edit applied"));
 }
 
 #[test]

@@ -109,12 +109,13 @@ fn turn_pieces(breadcrumb: &str, body: &str) -> Vec<String> {
 fn build_turn_units(turns: &[EpisodeTurn], session_id: &str) -> Vec<BuiltUnit> {
     let locator = session_locator(session_id);
     let mut units = Vec::new();
+    let mut episode = 0usize;
     for turn in turns {
         // Turns before the first user message are not indexed.
         if turn.user_text().trim().is_empty() {
             continue;
         }
-        let episode = turn.absolute_index + 1;
+        episode += 1;
         let breadcrumb = format!("{locator} > episode {episode}");
         let pieces = turn_pieces(&breadcrumb, &turn.body());
         let total = pieces.len();
