@@ -160,7 +160,10 @@ fn episode_cap_keeps_the_newest_turns() {
     }
     let units = ingest_pi_session(&session, "s5").unwrap();
     assert_eq!(units.len(), MAX_EPISODES_PER_SESSION);
-    assert_eq!(units[0].metadata["episode"], 1, "oldest turns dropped, renumbered");
+    assert_eq!(
+        units[0].metadata["episode"], 1,
+        "oldest turns dropped, renumbered"
+    );
     assert_eq!(
         units.last().unwrap().metadata["episode"],
         MAX_EPISODES_PER_SESSION as u64

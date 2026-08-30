@@ -458,11 +458,10 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                 if is_bash {
                     // The structured result upgrades the call's unknown outcome.
                     if let (Some(turn), Some(call_id)) = (current.as_mut(), call_id.as_deref()) {
-                        if let Some(call) = turn
-                            .events
-                            .iter_mut()
-                            .rev()
-                            .find(|event| event.kind == EventKind::ToolCall && event.id == call_id)
+                        if let Some(call) =
+                            turn.events.iter_mut().rev().find(|event| {
+                                event.kind == EventKind::ToolCall && event.id == call_id
+                            })
                         {
                             call.outcome = bash_outcome_from_content(&message.content, command);
                         }
