@@ -14,9 +14,26 @@ pub struct Language {
     pub name: &'static str,
     pub language: fn() -> tree_sitter::Language,
     pub interesting: fn(Node<'_>, &str) -> Option<AtomKind>,
-    pub symbol_name: fn(Node<'_>, &str) -> Option<String>,
+    pub symbol_info: fn(Node<'_>, &str) -> Option<SymbolInfo>,
     pub leading_context: fn(Node<'_>, &str) -> Option<Range<usize>>,
     pub is_atomic: fn(Node<'_>) -> bool,
+}
+
+/// One symbol identity: the rendered name and the qualified breadcrumb
+/// component. Existing languages keep both equal; C++ splits them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolInfo {
+    pub display_name: String,
+    pub qualified_component: String,
+}
+
+impl SymbolInfo {
+    pub fn plain(name: String) -> Self {
+        Self {
+            display_name: name.clone(),
+            qualified_component: name,
+        }
+    }
 }
 
 pub fn code_extension(path: &str) -> Option<&'static str> {
@@ -167,24 +184,24 @@ fn targets_exports(left: Node<'_>, source: &str) -> bool {
     }
 }
 
-fn rust_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
+fn rust_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     if node.kind() == "impl_item" {
         let target = node
             .child_by_field_name("type")
             .map(|child| source[child.byte_range()].trim())?;
-        return Some(match node.child_by_field_name("trait") {
+        return Some(SymbolInfo::plain(match node.child_by_field_name("trait") {
             Some(trait_node) => format!(
                 "impl {} for {target}",
                 source[trait_node.byte_range()].trim()
             ),
             None => format!("impl {target}"),
-        });
+        }));
     }
-    field_symbol_name(node, source)
+    field_symbol_info(node, source)
 }
 
-fn field_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
-    first_field_text(node, source, &["name", "type"])
+fn field_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+    first_field_text(node, source, &["name", "type"]).map(SymbolInfo::plain)
 }
 
 fn first_field_text(node: Node<'_>, source: &str, fields: &[&str]) -> Option<String> {
@@ -199,19 +216,19 @@ fn first_field_text(node: Node<'_>, source: &str, fields: &[&str]) -> Option<Str
     None
 }
 
-fn ecmascript_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
+fn ecmascript_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     if node.kind() == "assignment_expression" {
         if let Some(left) = node.child_by_field_name("left") {
             let value = source[left.byte_range()].trim();
             if !value.is_empty() {
-                return Some(value.to_string());
+                return Some(SymbolInfo::plain(value.to_string()));
             }
         }
     }
-    field_symbol_name(node, source)
+    field_symbol_info(node, source)
 }
 
-fn go_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
+fn go_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
         "method_declaration" => {
             let name = node.child_by_field_name("name")?;
@@ -225,18 +242,18 @@ fn go_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
             if base.is_empty() || method.is_empty() {
                 return None;
             }
-            Some(format!("{base}.{method}"))
+            Some(SymbolInfo::plain(format!("{base}.{method}")))
         }
-        "import_spec" => first_field_text(node, source, &["name", "path"]),
-        _ => field_symbol_name(node, source),
+        "import_spec" => first_field_text(node, source, &["name", "path"]).map(SymbolInfo::plain),
+        _ => field_symbol_info(node, source),
     }
 }
 
-fn java_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
+fn java_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
-        "field_declaration" => field_names(node, source),
-        "import_declaration" => import_symbol_name(node, source),
-        _ => field_symbol_name(node, source),
+        "field_declaration" => field_names(node, source).map(SymbolInfo::plain),
+        "import_declaration" => import_symbol_name(node, source).map(SymbolInfo::plain),
+        _ => field_symbol_info(node, source),
     }
 }
 
@@ -267,6 +284,33 @@ fn import_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
         .named_children(&mut cursor)
         .find(|child| matches!(child.kind(), "identifier" | "scoped_identifier"));
     import.map(|child| source[child.byte_range()].trim().to_string())
+}
+
+/// Walk a C-family declarator to its innermost identifier.
+///
+/// Recursion covers the declarator wrappers; qualified-component
+/// composition for `qualified_identifier` lands with the C++ adapter.
+/// A function pointer yields the variable identity so adapters can
+/// classify it as a plain declaration.
+// Consumed by the C and C++ adapters in later plan phases.
+#[allow(dead_code)]
+pub(super) fn declarator_name(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+    match node.kind() {
+        "identifier" | "type_identifier" => {
+            let name = source[node.byte_range()].trim();
+            (!name.is_empty()).then(|| SymbolInfo::plain(name.to_string()))
+        }
+        "function_declarator"
+        | "pointer_declarator"
+        | "array_declarator"
+        | "parenthesized_declarator"
+        | "attributed_declarator"
+        | "init_declarator" => node
+            .child_by_field_name("declarator")
+            .or_else(|| node.named_child(0))
+            .and_then(|child| declarator_name(child, source)),
+        _ => None,
+    }
 }
 
 fn sibling_context(node: Node<'_>, source: &str, kinds: &[&str]) -> Option<Range<usize>> {
@@ -363,7 +407,7 @@ pub fn language_for(locator: &str) -> Option<Language> {
             name: "rust",
             language: || tree_sitter_rust::LANGUAGE.into(),
             interesting: rust_interesting,
-            symbol_name: rust_symbol_name,
+            symbol_info: rust_symbol_info,
             leading_context: rust_leading_context,
             is_atomic: rust_atomic,
         }),
@@ -371,7 +415,7 @@ pub fn language_for(locator: &str) -> Option<Language> {
             name: "python",
             language: || tree_sitter_python::LANGUAGE.into(),
             interesting: python_interesting,
-            symbol_name: field_symbol_name,
+            symbol_info: field_symbol_info,
             leading_context: python_leading_context,
             is_atomic: python_atomic,
         }),
@@ -379,7 +423,7 @@ pub fn language_for(locator: &str) -> Option<Language> {
             name: "typescript",
             language: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             interesting: ecmascript_interesting,
-            symbol_name: ecmascript_symbol_name,
+            symbol_info: ecmascript_symbol_info,
             leading_context: ecmascript_leading_context,
             is_atomic: ecmascript_atomic,
         }),
@@ -387,7 +431,7 @@ pub fn language_for(locator: &str) -> Option<Language> {
             name: "typescript",
             language: || tree_sitter_typescript::LANGUAGE_TSX.into(),
             interesting: ecmascript_interesting,
-            symbol_name: ecmascript_symbol_name,
+            symbol_info: ecmascript_symbol_info,
             leading_context: ecmascript_leading_context,
             is_atomic: ecmascript_atomic,
         }),
@@ -395,7 +439,7 @@ pub fn language_for(locator: &str) -> Option<Language> {
             name: "javascript",
             language: || tree_sitter_javascript::LANGUAGE.into(),
             interesting: ecmascript_interesting,
-            symbol_name: ecmascript_symbol_name,
+            symbol_info: ecmascript_symbol_info,
             leading_context: ecmascript_leading_context,
             is_atomic: ecmascript_atomic,
         }),
@@ -403,7 +447,7 @@ pub fn language_for(locator: &str) -> Option<Language> {
             name: "go",
             language: || tree_sitter_go::LANGUAGE.into(),
             interesting: go_interesting,
-            symbol_name: go_symbol_name,
+            symbol_info: go_symbol_info,
             leading_context: go_leading_context,
             is_atomic: go_atomic,
         }),
@@ -411,7 +455,7 @@ pub fn language_for(locator: &str) -> Option<Language> {
             name: "java",
             language: || tree_sitter_java::LANGUAGE.into(),
             interesting: java_interesting,
-            symbol_name: java_symbol_name,
+            symbol_info: java_symbol_info,
             leading_context: java_leading_context,
             is_atomic: java_atomic,
         }),

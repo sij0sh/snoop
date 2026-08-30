@@ -10,7 +10,7 @@ mod languages;
 mod tests;
 
 pub use languages::{code_extension, language_name, supports_code_path};
-use languages::{language_for, Language};
+use languages::{language_for, Language, SymbolInfo};
 
 pub fn parse_code(source: &str, locator: &str) -> Result<Vec<ParsedAtom>, String> {
     let language =
@@ -72,22 +72,27 @@ impl<'a> EmitContext<'a> {
     fn emit(&mut self, node: Node<'_>) -> bool {
         let source = self.source;
         if let Some(kind) = (self.language.interesting)(node, source) {
-            let name = (self.language.symbol_name)(node, source).unwrap_or_else(|| {
-                source[node.byte_range()]
-                    .lines()
-                    .next()
-                    .unwrap_or(node.kind())
-                    .trim()
-                    .chars()
-                    .take(80)
-                    .collect()
+            let info = (self.language.symbol_info)(node, source).unwrap_or_else(|| {
+                SymbolInfo::plain(
+                    source[node.byte_range()]
+                        .lines()
+                        .next()
+                        .unwrap_or(node.kind())
+                        .trim()
+                        .chars()
+                        .take(80)
+                        .collect(),
+                )
             });
             let parent = self.enclosing.last().copied().unwrap_or(self.file_index);
-            let breadcrumb = format!("{} > {}", self.atoms[parent].breadcrumb, name);
+            let breadcrumb = format!(
+                "{} > {}",
+                self.atoms[parent].breadcrumb, info.qualified_component
+            );
             let text = source[node.byte_range()].to_string();
             let mut references = BTreeSet::new();
             collect_identifiers(node, source, &mut references);
-            references.remove(&name);
+            references.remove(&info.display_name);
             let references: Vec<String> = references.into_iter().take(64).collect();
             let max_chars = (crate::ingest::units::MAX_TOKENS * 4)
                 .saturating_sub(breadcrumb.chars().count() + 2)
@@ -116,7 +121,7 @@ impl<'a> EmitContext<'a> {
                 breadcrumb: breadcrumb.clone(),
                 metadata: serde_json::json!({
                     "file": self.locator,
-                    "symbol": name,
+                    "symbol": info.display_name,
                     "signature": signature(node, source),
                     "references": references,
                     "chunk_segments": segments,
