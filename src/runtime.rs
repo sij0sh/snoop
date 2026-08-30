@@ -60,6 +60,11 @@ impl QueryChannels {
             },
         }
     }
+
+    /// Whether any vector channel is enabled (drives the query-embed path).
+    pub fn has_vector_channels(&self) -> bool {
+        self.evidence_vector || self.routing_vector
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -153,12 +158,24 @@ fn cached_unit(
     Ok(unit)
 }
 
-/// Oversampled candidate pool for the role-aware builders.
 pub fn query(
     store: &Store,
     embedder: Option<&dyn Embedder>,
     text: &str,
     options: &QueryOptions,
+) -> Result<QueryReport, Box<dyn std::error::Error + Send + Sync>> {
+    query_with_vector(store, embedder, text, options, None)
+}
+
+/// Like [`query`], but reuses a caller-supplied query embedding when vector
+/// channels are enabled. The embedder still backs every other embed path;
+/// `None` behaves exactly like `query`.
+pub fn query_with_vector(
+    store: &Store,
+    embedder: Option<&dyn Embedder>,
+    text: &str,
+    options: &QueryOptions,
+    query_vector: Option<Vec<f32>>,
 ) -> Result<QueryReport, Box<dyn std::error::Error + Send + Sync>> {
     if (options.channels.evidence_vector || options.channels.routing_vector) && embedder.is_none() {
         return Err("vector channels require a configured embedder".into());
@@ -174,7 +191,10 @@ pub fn query(
         Vec::new()
     };
     let query_vector = if options.channels.evidence_vector || options.channels.routing_vector {
-        Some(embedder.unwrap().embed_query(text)?)
+        match query_vector {
+            Some(vector) => Some(vector),
+            None => Some(embedder.unwrap().embed_query(text)?),
+        }
     } else {
         None
     };
