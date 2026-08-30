@@ -10,11 +10,12 @@ mod languages;
 mod tests;
 
 pub use languages::{code_extension, language_name, supports_code_path};
-use languages::{language_for, Language, SymbolInfo};
+use languages::{language_for_source, Language, SymbolInfo};
 
 pub fn parse_code(source: &str, locator: &str) -> Result<Vec<ParsedAtom>, String> {
     let language =
-        language_for(locator).ok_or_else(|| format!("unsupported code locator: {locator}"))?;
+        language_for_source(locator, source)
+            .ok_or_else(|| format!("unsupported code locator: {locator}"))?;
     let mut parser = Parser::new();
     parser
         .set_language(&(language.language)())
@@ -71,19 +72,32 @@ impl<'a> EmitContext<'a> {
 
     fn emit(&mut self, node: Node<'_>) -> bool {
         let source = self.source;
-        if let Some(kind) = (self.language.interesting)(node, source) {
-            let info = (self.language.symbol_info)(node, source).unwrap_or_else(|| {
-                SymbolInfo::plain(
-                    source[node.byte_range()]
-                        .lines()
-                        .next()
-                        .unwrap_or(node.kind())
-                        .trim()
-                        .chars()
-                        .take(80)
-                        .collect(),
-                )
-            });
+
+        // Script languages execute meaningful code at the top level, so
+        // the root program becomes a Module overview unit.
+        let root_overview = node.parent().is_none() && self.language.root_overview;
+        let kind = if root_overview {
+            Some(AtomKind::Module)
+        } else {
+            (self.language.interesting)(node, source)
+        };
+        if let Some(kind) = kind {
+            let info = if root_overview {
+                SymbolInfo::plain("program".to_string())
+            } else {
+                (self.language.symbol_info)(node, source).unwrap_or_else(|| {
+                    SymbolInfo::plain(
+                        source[node.byte_range()]
+                            .lines()
+                            .next()
+                            .unwrap_or(node.kind())
+                            .trim()
+                            .chars()
+                            .take(80)
+                            .collect(),
+                    )
+                })
+            };
             let parent = self.enclosing.last().copied().unwrap_or(self.file_index);
             let breadcrumb = format!(
                 "{} > {}",
@@ -127,6 +141,7 @@ impl<'a> EmitContext<'a> {
                     "chunk_segments": segments,
                     "chunk_alternatives": alternative_segments,
                     "node_kind": node.kind(),
+                    "is_import": !root_overview && (self.language.is_import)(node, source),
                     "leading_context": leading_context.map(|range| serde_json::json!({
                         "start_offset": range.start,
                         "end_offset": range.end,

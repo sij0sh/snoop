@@ -57,3 +57,7 @@ pub(super) fn go_atomic(node: Node<'_>) -> bool {
         "interpreted_string_literal" | "raw_string_literal" | "rune_literal"
     )
 }
+
+pub(super) fn go_is_import(node: Node<'_>, _source: &str) -> bool {
+    node.kind() == "import_spec"
+}

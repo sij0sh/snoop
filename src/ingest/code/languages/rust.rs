@@ -54,3 +54,10 @@ pub(super) fn rust_atomic(node: Node<'_>) -> bool {
         "string_literal" | "raw_string_literal" | "macro_definition"
     )
 }
+
+pub(super) fn rust_is_import(node: Node<'_>, _source: &str) -> bool {
+    matches!(
+        node.kind(),
+        "use_declaration" | "extern_crate_declaration"
+    )
+}

@@ -13,22 +13,33 @@ mod csharp;
 mod ecmascript;
 mod go;
 mod java;
+mod php;
 mod python;
 mod registry;
+mod ruby;
 mod rust;
+mod shell;
 
-use c::{c_atomic, c_interesting, c_leading_context, c_symbol_info};
-use cpp::{cpp_atomic, cpp_interesting, cpp_leading_context, cpp_symbol_info};
-use csharp::{csharp_atomic, csharp_interesting, csharp_leading_context, csharp_symbol_info};
-use ecmascript::{
-    ecmascript_atomic, ecmascript_interesting, ecmascript_leading_context, ecmascript_symbol_info,
+use c::{c_atomic, c_interesting, c_is_import, c_leading_context, c_symbol_info};
+use cpp::{cpp_atomic, cpp_interesting, cpp_is_import, cpp_leading_context, cpp_symbol_info};
+use csharp::{
+    csharp_atomic, csharp_interesting, csharp_is_import, csharp_leading_context, csharp_symbol_info,
 };
-use go::{go_atomic, go_interesting, go_leading_context, go_symbol_info};
-use java::{java_atomic, java_interesting, java_leading_context, java_symbol_info};
-use python::{python_atomic, python_interesting, python_leading_context};
-use rust::{rust_atomic, rust_interesting, rust_leading_context, rust_symbol_info};
+use ecmascript::{
+    ecmascript_atomic, ecmascript_interesting, ecmascript_is_import, ecmascript_leading_context,
+    ecmascript_symbol_info,
+};
+use go::{go_atomic, go_interesting, go_is_import, go_leading_context, go_symbol_info};
+use java::{java_atomic, java_interesting, java_is_import, java_leading_context, java_symbol_info};
+use php::{php_atomic, php_interesting, php_is_import, php_leading_context};
+use python::{python_atomic, python_interesting, python_is_import, python_leading_context};
+use ruby::{ruby_atomic, ruby_interesting, ruby_is_import, ruby_leading_context, ruby_symbol_info};
+use rust::{rust_atomic, rust_interesting, rust_is_import, rust_leading_context, rust_symbol_info};
+use shell::{shell_atomic, shell_interesting, shell_is_import, shell_leading_context};
 
-pub use registry::{code_extension, language_for, language_name, supports_code_path, Language};
+pub use registry::{
+    code_extension, language_for, language_for_source, language_name, supports_code_path, Language,
+};
 
 /// One symbol identity: the rendered name and the qualified breadcrumb
 /// component. Existing languages keep both equal; C++ splits them.

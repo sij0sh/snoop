@@ -111,3 +111,7 @@ pub(super) fn csharp_atomic(node: Node<'_>) -> bool {
             | "interpolated_string_expression"
     )
 }
+
+pub(super) fn csharp_is_import(node: Node<'_>, _source: &str) -> bool {
+    node.kind() == "using_directive"
+}

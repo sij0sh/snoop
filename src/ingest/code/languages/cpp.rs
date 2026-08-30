@@ -107,3 +107,7 @@ pub(super) fn cpp_atomic(node: Node<'_>) -> bool {
         "string_literal" | "char_literal" | "raw_string_literal" | "preproc_arg"
     )
 }
+
+pub(super) fn cpp_is_import(node: Node<'_>, _source: &str) -> bool {
+    node.kind() == "preproc_include"
+}

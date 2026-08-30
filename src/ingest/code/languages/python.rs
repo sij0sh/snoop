@@ -39,3 +39,7 @@ pub(super) fn python_leading_context(node: Node<'_>, source: &str) -> Option<Ran
 pub(super) fn python_atomic(node: Node<'_>) -> bool {
     matches!(node.kind(), "string" | "concatenated_string")
 }
+
+pub(super) fn python_is_import(node: Node<'_>, _source: &str) -> bool {
+    node.kind() == "import_statement"
+}

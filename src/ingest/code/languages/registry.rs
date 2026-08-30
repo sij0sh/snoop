@@ -6,15 +6,17 @@ use std::ops::Range;
 use tree_sitter::Node;
 
 use super::{
-    c_atomic, c_interesting, c_leading_context, c_symbol_info, cpp_atomic, cpp_interesting,
-    cpp_leading_context, cpp_symbol_info, csharp_atomic, csharp_interesting,
-    csharp_leading_context, csharp_symbol_info, ecmascript_atomic, ecmascript_interesting,
-    ecmascript_leading_context, ecmascript_symbol_info, field_symbol_info, go_atomic,
-    go_interesting, go_leading_context, go_symbol_info, java_atomic, java_interesting,
-    java_leading_context, java_symbol_info, php_atomic, php_interesting, php_leading_context,
-    python_atomic, python_interesting, python_leading_context, ruby_atomic, ruby_interesting,
-    ruby_leading_context, ruby_symbol_info, rust_atomic, rust_interesting, rust_leading_context,
-    rust_symbol_info, shell_atomic, shell_interesting, shell_leading_context, shell_symbol_info,
+    c_atomic, c_interesting, c_is_import, c_leading_context, c_symbol_info, cpp_atomic,
+    cpp_interesting, cpp_is_import, cpp_leading_context, cpp_symbol_info, csharp_atomic,
+    csharp_interesting, csharp_is_import, csharp_leading_context, csharp_symbol_info,
+    ecmascript_atomic, ecmascript_interesting, ecmascript_is_import, ecmascript_leading_context,
+    ecmascript_symbol_info, field_symbol_info, go_atomic, go_interesting, go_is_import,
+    go_leading_context, go_symbol_info, java_atomic, java_interesting, java_is_import,
+    java_leading_context, java_symbol_info, php_atomic, php_interesting, php_is_import,
+    php_leading_context, python_atomic, python_interesting, python_is_import,
+    python_leading_context, ruby_atomic, ruby_interesting, ruby_is_import, ruby_leading_context,
+    ruby_symbol_info, rust_atomic, rust_interesting, rust_is_import, rust_leading_context,
+    rust_symbol_info, shell_atomic, shell_interesting, shell_is_import, shell_leading_context,
     SymbolInfo,
 };
 use crate::core::AtomKind;

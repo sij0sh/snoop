@@ -99,3 +99,7 @@ pub(super) fn ecmascript_atomic(node: Node<'_>) -> bool {
         "string" | "template_string" | "regex" | "jsx_element" | "jsx_fragment"
     )
 }
+
+pub(super) fn ecmascript_is_import(node: Node<'_>, _source: &str) -> bool {
+    node.kind() == "import_statement"
+}

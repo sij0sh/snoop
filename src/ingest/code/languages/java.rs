@@ -67,3 +67,7 @@ pub(super) fn java_leading_context(node: Node<'_>, source: &str) -> Option<Range
 pub(super) fn java_atomic(node: Node<'_>) -> bool {
     matches!(node.kind(), "string_literal" | "character_literal")
 }
+
+pub(super) fn java_is_import(node: Node<'_>, _source: &str) -> bool {
+    node.kind() == "import_declaration"
+}
