@@ -13,9 +13,8 @@ pub use languages::{code_extension, language_name, supports_code_path};
 use languages::{language_for_source, Language, SymbolInfo};
 
 pub fn parse_code(source: &str, locator: &str) -> Result<Vec<ParsedAtom>, String> {
-    let language =
-        language_for_source(locator, source)
-            .ok_or_else(|| format!("unsupported code locator: {locator}"))?;
+    let language = language_for_source(locator, source)
+        .ok_or_else(|| format!("unsupported code locator: {locator}"))?;
     let mut parser = Parser::new();
     parser
         .set_language(&(language.language)())

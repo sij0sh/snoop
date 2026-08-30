@@ -31,7 +31,7 @@ use ecmascript::{
 };
 use go::{go_atomic, go_interesting, go_is_import, go_leading_context, go_symbol_info};
 use java::{java_atomic, java_interesting, java_is_import, java_leading_context, java_symbol_info};
-use php::{php_atomic, php_interesting, php_is_import, php_leading_context};
+use php::{php_atomic, php_interesting, php_is_import, php_leading_context, php_symbol_info};
 use python::{python_atomic, python_interesting, python_is_import, python_leading_context};
 use ruby::{ruby_atomic, ruby_interesting, ruby_is_import, ruby_leading_context, ruby_symbol_info};
 use rust::{rust_atomic, rust_interesting, rust_is_import, rust_leading_context, rust_symbol_info};

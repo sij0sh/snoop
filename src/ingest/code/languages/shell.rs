@@ -26,11 +26,7 @@ pub(super) fn shell_leading_context(node: Node<'_>, source: &str) -> Option<Rang
 pub(super) fn shell_atomic(node: Node<'_>) -> bool {
     matches!(
         node.kind(),
-        "string"
-            | "raw_string"
-            | "heredoc_body"
-            | "command_substitution"
-            | "arithmetic_expansion"
+        "string" | "raw_string" | "heredoc_body" | "command_substitution" | "arithmetic_expansion"
     )
 }
 

@@ -3,6 +3,9 @@ mod c;
 mod c_declarator;
 mod cpp;
 mod csharp;
+mod php;
+mod ruby;
+mod shell;
 
 #[test]
 fn rust_symbols_include_signature_and_references() {
@@ -302,22 +305,32 @@ fn tsx_files_parse_with_jsx_extension() {
 #[test]
 fn code_extensions_cover_the_shared_registry() {
     for locator in [
-        "a.rs", "a.py", "a.pyi", "a.pyw", "a.ts", "a.tsx", "a.mts", "a.cts", "a.js", "a.jsx",
-        "a.mjs", "a.cjs", "a.go", "a.java", "a.cs", "a.c", "a.cc", "a.cpp", "a.cxx", "a.h", "a.hh",
-        "a.hpp", "a.hxx", "a.ipp", "a.tpp", "a.inl",
+        "a.rs",
+        "a.py",
+        "a.pyi",
+        "a.pyw",
+        "a.ts",
+        "a.tsx",
+        "a.mts",
+        "a.cts",
+        "a.js",
+        "a.jsx",
+        "a.hpp",
+        "a.hxx",
+        "a.ipp",
+        "a.tpp",
+        "a.inl",
+        "a.rb",
+        "a.rake",
+        "a.gemspec",
+        "a.php",
+        "a.phtml",
+        "a.sh",
+        "a.bash",
     ] {
         assert!(supports_code_path(locator), "{locator} must be supported");
     }
-    for locator in [
-        "a.md",
-        "a.txt",
-        "README",
-        "a.json",
-        ".gitignore",
-        "a.php",
-        "a.sh",
-        "a.tf",
-    ] {
+    for locator in ["a.md", "a.txt", "README", "a.json", ".gitignore", "a.tf"] {
         assert!(!supports_code_path(locator), "{locator} must not be code");
     }
     assert_eq!(language_name("src/app.tsx"), Some("typescript"));

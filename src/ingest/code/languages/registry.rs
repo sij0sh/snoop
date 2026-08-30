@@ -13,7 +13,7 @@ use super::{
     ecmascript_symbol_info, field_symbol_info, go_atomic, go_interesting, go_is_import,
     go_leading_context, go_symbol_info, java_atomic, java_interesting, java_is_import,
     java_leading_context, java_symbol_info, php_atomic, php_interesting, php_is_import,
-    php_leading_context, python_atomic, python_interesting, python_is_import,
+    php_leading_context, php_symbol_info, python_atomic, python_interesting, python_is_import,
     python_leading_context, ruby_atomic, ruby_interesting, ruby_is_import, ruby_leading_context,
     ruby_symbol_info, rust_atomic, rust_interesting, rust_is_import, rust_leading_context,
     rust_symbol_info, shell_atomic, shell_interesting, shell_is_import, shell_leading_context,
@@ -96,7 +96,7 @@ const LANGUAGES: &[(&str, LanguageMatch)] = &[
     (
         "c",
         LanguageMatch {
-            extensions: &["c", "h"],
+            extensions: &["c"],
             filenames: &[],
             shebangs: &[],
         },
@@ -105,7 +105,9 @@ const LANGUAGES: &[(&str, LanguageMatch)] = &[
         // Header policy is extension-only with no content sniffing.
         "cpp",
         LanguageMatch {
-            extensions: &["cc", "cpp", "cxx", "hh", "hpp", "hxx", "ipp", "tpp", "inl"],
+            extensions: &[
+                "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "ipp", "tpp", "inl",
+            ],
             filenames: &[],
             shebangs: &[],
         },
@@ -204,16 +206,19 @@ fn language_key_by_path(path: &str) -> Option<&'static str> {
 fn shebang_key(source: &str) -> Option<&'static str> {
     let bytes = source.as_bytes();
     let window = &bytes[..bytes.len().min(256)];
-    let end = window.iter().position(|&byte| byte == b'\n').unwrap_or(window.len());
+    let end = window
+        .iter()
+        .position(|&byte| byte == b'\n')
+        .unwrap_or(window.len());
     let line = std::str::from_utf8(&window[..end]).ok()?;
     let body = line.strip_prefix("#!")?;
     LANGUAGES
         .iter()
         .find(|(_, entry)| {
-            entry
-                .shebangs
-                .iter()
-                .any(|token| body.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| part == *token))
+            entry.shebangs.iter().any(|token| {
+                body.split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|part| part == *token)
+            })
         })
         .map(|(name, _)| *name)
 }
@@ -324,7 +329,7 @@ fn build_language(key: &'static str) -> Option<Language> {
             name: "php",
             language: || tree_sitter_php::LANGUAGE_PHP.into(),
             interesting: php_interesting,
-            symbol_info: field_symbol_info,
+            symbol_info: php_symbol_info,
             leading_context: php_leading_context,
             is_atomic: php_atomic,
             is_import: php_is_import,

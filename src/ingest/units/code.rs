@@ -95,7 +95,11 @@ fn shell_evidence(atoms: &[ParsedAtom], index: usize, children: &[usize]) -> Str
             .unwrap_or_default();
         let line = signature.split('{').next().unwrap_or(signature).trim();
         if line.is_empty() {
-            let name = child_atom.breadcrumb.rsplit(" > ").next().unwrap_or_default();
+            let name = child_atom
+                .breadcrumb
+                .rsplit(" > ")
+                .next()
+                .unwrap_or_default();
             evidence.push_str(name);
         } else {
             evidence.push_str(line);
