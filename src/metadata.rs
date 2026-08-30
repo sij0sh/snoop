@@ -10,6 +10,14 @@
 //! `unit_shape`, `node_kind`, or `symbol_id`) stay inline: no cross-module
 //! edge means no owner needed. `tests/architecture.rs` enforces that owned
 //! key literals appear only in this module.
+//!
+//! Upgrade policy: persisted metadata JSON is never transformed in place,
+//! not even by schema migrations, which copy it byte-for-byte. When a
+//! contract's persisted shape changes incompatibly (rename, removal, type
+//! or meaning change), bump `INDEX_FORMAT_VERSION` in `src/ingest/mod.rs`
+//! so existing databases rebuild every source on the next index run. Read
+//! functions stay total: an unrecognized shape decodes to the documented
+//! default instead of reconstructing old semantics.
 
 use serde_json::Value;
 
