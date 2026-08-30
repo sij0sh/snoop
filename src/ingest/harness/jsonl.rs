@@ -158,8 +158,6 @@ impl EpisodeTurn {
                     text.push_str("\nTool: ");
                     text.push_str(&event.text);
                     text.push('\n');
-                }
-                EventKind::ToolResult => {
                     if let Some(outcome) = &event.outcome {
                         text.push_str("\nCommand: ");
                         text.push_str(&outcome.command);
@@ -168,6 +166,7 @@ impl EpisodeTurn {
                         text.push('\n');
                     }
                 }
+                EventKind::ToolResult => {}
             }
         }
         text
@@ -456,11 +455,19 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                         .content
                         .iter()
                         .any(|block| block.tool_name.as_deref() == Some("bash"));
-                let outcome = if is_bash {
-                    bash_outcome_from_content(&message.content, command)
-                } else {
-                    None
-                };
+                if is_bash {
+                    // The structured result upgrades the call's unknown outcome.
+                    if let (Some(turn), Some(call_id)) = (current.as_mut(), call_id.as_deref()) {
+                        if let Some(call) = turn
+                            .events
+                            .iter_mut()
+                            .rev()
+                            .find(|event| event.kind == EventKind::ToolCall && event.id == call_id)
+                        {
+                            call.outcome = bash_outcome_from_content(&message.content, command);
+                        }
+                    }
+                }
                 if let Some(turn) = current.as_mut() {
                     turn.events.push(EpisodeEvent {
                         id: event_id,
@@ -469,7 +476,7 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                         end_byte,
                         text: String::new(),
                         files: Vec::new(),
-                        outcome,
+                        outcome: None,
                     });
                 }
             }
