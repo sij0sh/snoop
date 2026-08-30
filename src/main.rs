@@ -330,21 +330,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let anchors = store
                         .anchors_for_unit(id)?
                         .into_iter()
-                        .filter_map(|(kind, relationship, anchor_id)| {
-                            store
-                                .anchor_value(repository.id, &kind, anchor_id)
-                                .transpose()
-                                .map(|value| {
-                                    value.map(|value| {
-                                        serde_json::json!({
-                                            "kind": kind,
-                                            "value": value,
-                                            "relationship": relationship,
-                                        })
-                                    })
-                                })
+                        .map(|anchor| {
+                            serde_json::json!({
+                                "kind": anchor.kind.as_str(),
+                                "value": anchor.value,
+                                "relationship": anchor.relationship,
+                            })
                         })
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                        .collect::<Vec<_>>();
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&serde_json::json!({
@@ -375,13 +368,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             for id in store.units_for_anchor(repository.id, "symbol", &symbol, 64)? {
                 if let Some(unit) = store.unit_by_id(id)? {
                     if unit.source_kind == snoop::core::SourceKind::Code {
-                        for (kind, _relationship, anchor_id) in store.anchors_for_unit(id)? {
-                            if kind == "file" {
-                                if let Some(file) =
-                                    store.anchor_value(repository.id, &kind, anchor_id)?
-                                {
-                                    defining_files.insert(file);
-                                }
+                        for anchor in store.anchors_for_unit(id)? {
+                            if anchor.kind.as_str() == "file" {
+                                defining_files.insert(anchor.value);
                             }
                         }
                     }

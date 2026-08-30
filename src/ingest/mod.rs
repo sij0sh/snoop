@@ -13,7 +13,7 @@ use crate::core::{RepoId, Repository, SourceKind};
 use crate::inference::Embedder;
 use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 
-pub const INDEX_FORMAT_VERSION: &str = "phase-11-v1";
+pub const INDEX_FORMAT_VERSION: &str = "phase-12-v1";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed request, so the TTL only
@@ -169,7 +169,7 @@ fn index_repository_body(
                 outcome.timed_out = true;
                 break;
             }
-            let (atoms, units) = git::ingest_commit(&root, &commit)?;
+            let units = git::ingest_commit(&root, &commit)?;
             let committed = store.commit_source(SourceIngest {
                 repo_id: repository.id,
                 kind: SourceKind::GitCommit,
@@ -177,7 +177,6 @@ fn index_repository_body(
                 content_hash: &commit.content_hash,
                 modified_at: Some(commit.timestamp),
                 metadata: serde_json::json!({"commit": commit.oid}),
-                atoms: &atoms,
                 units: &units,
             })?;
             outcome.changed_sources += 1;
@@ -199,7 +198,7 @@ fn index_repository_body(
             if outcome.timed_out {
                 break;
             }
-            let locator = session.harness.locator(&session.session_id);
+            let locator = harness::session_locator(&session.session_id);
             present.insert(locator.clone());
             let bytes = std::fs::read(&session.path)?;
             if bytes.len() as u64 > harness::MAX_SESSION_BYTES {
@@ -219,7 +218,7 @@ fn index_repository_body(
                 break;
             }
             let content = String::from_utf8_lossy(&bytes).into_owned();
-            let (atoms, units) = harness::ingest_pi_session(&content, &session.session_id)?;
+            let units = harness::ingest_pi_session(&content, &session.session_id)?;
             let committed = store.commit_source(SourceIngest {
                 repo_id: repository.id,
                 kind: SourceKind::AgentSession,
@@ -227,7 +226,6 @@ fn index_repository_body(
                 content_hash: &content_hash,
                 modified_at: None,
                 metadata: serde_json::json!({"session": session.session_id}),
-                atoms: &atoms,
                 units: &units,
             })?;
             outcome.changed_sources += 1;
@@ -301,7 +299,6 @@ fn index_repository_body(
             content_hash: &source.content_hash,
             modified_at: source.modified_at,
             metadata: serde_json::json!({"path": source.locator}),
-            atoms: &atoms,
             units: &built,
         })?;
         outcome.changed_sources += 1;

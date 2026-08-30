@@ -8,9 +8,6 @@ pub struct RepoId(pub i64);
 pub struct SourceId(pub i64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AtomId(pub i64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UnitId(pub i64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,7 +154,6 @@ pub enum UnitKind {
     Code,
     Git,
     Episode,
-    EpisodeSegment,
 }
 
 impl UnitKind {
@@ -167,7 +163,6 @@ impl UnitKind {
             Self::Code => "code",
             Self::Git => "git",
             Self::Episode => "episode",
-            Self::EpisodeSegment => "episode_segment",
         }
     }
 
@@ -177,13 +172,14 @@ impl UnitKind {
             "code" => Some(Self::Code),
             "git" => Some(Self::Git),
             "episode" => Some(Self::Episode),
-            "episode_segment" => Some(Self::EpisodeSegment),
+            // Legacy rows written by the retired segmentation policy.
+            "episode_segment" => Some(Self::Episode),
             _ => None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AnchorKind {
     File,
     Symbol,
@@ -212,12 +208,18 @@ impl AnchorKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedAnchor {
+    pub kind: AnchorKind,
+    pub value: String,
+    pub relationship: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BuiltAnchor {
     pub kind: AnchorKind,
     pub value: String,
     pub relationship: String,
-    pub confidence: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -227,7 +229,6 @@ pub struct BuiltUnit {
     pub routing_text: String,
     pub token_count: usize,
     pub content_hash: String,
-    pub atom_indices: Vec<usize>,
     pub metadata: Value,
     pub anchors: Vec<BuiltAnchor>,
 }
@@ -245,7 +246,6 @@ pub struct RetrievalUnit {
     pub token_count: usize,
     pub content_hash: String,
     pub timestamp: Option<i64>,
-    pub atom_ids: Vec<AtomId>,
     pub metadata: Value,
 }
 
@@ -266,7 +266,6 @@ pub struct ContextItem {
     pub source_kind: SourceKind,
     pub evidence_text: String,
     pub source_locator: String,
-    pub atom_ids: Vec<AtomId>,
     pub source_slices: Vec<Value>,
     pub anchors: Vec<String>,
     pub timestamp: Option<i64>,

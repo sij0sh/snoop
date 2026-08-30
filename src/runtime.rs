@@ -398,19 +398,20 @@ pub fn query(
         let anchors = store
             .anchors_for_unit(*unit_id)?
             .into_iter()
-            .filter_map(|(kind, relationship, anchor_id)| {
-                store
-                    .anchor_value(repo_id, &kind, anchor_id)
-                    .transpose()
-                    .map(|value| value.map(|value| format!("{kind}:{value}:{relationship}")))
+            .map(|anchor| {
+                format!(
+                    "{}:{}:{}",
+                    anchor.kind.as_str(),
+                    anchor.value,
+                    anchor.relationship
+                )
             })
-            .collect::<rusqlite::Result<Vec<String>>>()?;
+            .collect::<Vec<String>>();
         items.push(ContextItem {
             unit_id: unit.id,
             source_kind: unit.source_kind,
             evidence_text: unit.evidence_text,
             source_locator: unit.locator,
-            atom_ids: unit.atom_ids,
             source_slices: unit.metadata["source_slices"]
                 .as_array()
                 .cloned()

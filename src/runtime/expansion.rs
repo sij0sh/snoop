@@ -46,12 +46,11 @@ pub(crate) fn plan_expansion(
     let mut candidate_reasons: HashMap<i64, Vec<SelectionReason>> = HashMap::new();
     let mut expansion_debug: Vec<ExpansionDebug> = Vec::new();
     for &seed in &seed_ids {
-        for (kind, _relationship, anchor_id) in store.anchors_for_unit(seed)? {
-            let Some(value) = store.anchor_value(repo_id, &kind, anchor_id)? else {
-                continue;
-            };
+        for anchor in store.anchors_for_unit(seed)? {
+            let kind = anchor.kind.as_str();
+            let value = anchor.value.as_str();
             let connected =
-                store.units_for_anchor(repo_id, &kind, &value, EXPANSION_CANDIDATES_PER_ANCHOR)?;
+                store.units_for_anchor(repo_id, kind, value, EXPANSION_CANDIDATES_PER_ANCHOR)?;
             for candidate in connected {
                 if candidate == seed {
                     continue;
@@ -86,12 +85,12 @@ pub(crate) fn plan_expansion(
                 }
                 candidate_scores.insert(candidate, score);
                 candidate_reasons.entry(candidate).or_default().push(
-                    SelectionReason::AnchorExpansion(kind.clone(), value.clone(), seed),
+                    SelectionReason::AnchorExpansion(kind.to_string(), value.to_string(), seed),
                 );
                 expansion_debug.push(ExpansionDebug {
                     seed_unit: seed,
-                    anchor_kind: kind.clone(),
-                    anchor_value: value.clone(),
+                    anchor_kind: kind.to_string(),
+                    anchor_value: value.to_string(),
                     candidate,
                     expanded_score: score,
                     accepted: false,

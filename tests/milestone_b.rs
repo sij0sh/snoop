@@ -72,31 +72,30 @@ fn anchors_are_emitted_for_every_source_kind() {
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let mut kinds = std::collections::HashSet::new();
-    let mut confidence_seen = false;
+    let mut anchor_seen = false;
     for id in store.unit_ids(outcome.repo_id).unwrap() {
-        for (kind, relationship, anchor_id) in store.anchors_for_unit(id).unwrap() {
-            kinds.insert(kind.clone());
+        for anchor in store.anchors_for_unit(id).unwrap() {
+            kinds.insert(anchor.kind);
             assert!(
-                store
-                    .anchor_value(outcome.repo_id, &kind, anchor_id)
-                    .unwrap()
-                    .is_some(),
-                "anchor resolves to a value ({kind}, {relationship})"
+                !anchor.value.is_empty(),
+                "anchor resolves to a value ({}, {})",
+                anchor.kind.as_str(),
+                anchor.relationship
             );
-            confidence_seen = true;
+            anchor_seen = true;
         }
     }
-    assert!(confidence_seen, "anchors exist");
+    assert!(anchor_seen, "anchors exist");
     assert!(
-        kinds.contains("file"),
+        kinds.contains(&snoop::core::AnchorKind::File),
         "file anchors emitted, got {kinds:?}"
     );
     assert!(
-        kinds.contains("symbol"),
+        kinds.contains(&snoop::core::AnchorKind::Symbol),
         "symbol anchors emitted, got {kinds:?}"
     );
     assert!(
-        kinds.contains("commit"),
+        kinds.contains(&snoop::core::AnchorKind::Commit),
         "commit anchors emitted, got {kinds:?}"
     );
 

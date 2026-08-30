@@ -74,14 +74,12 @@ fn code_unit(evidence: &str, file: &str, anchor_symbol: Option<&str>) -> BuiltUn
         kind: crate::core::AnchorKind::File,
         value: file.to_string(),
         relationship: "defines".to_string(),
-        confidence: "deterministic".to_string(),
     }];
     if let Some(symbol) = anchor_symbol {
         anchors.push(BuiltAnchor {
             kind: crate::core::AnchorKind::Symbol,
             value: symbol.to_string(),
             relationship: "defines".to_string(),
-            confidence: "deterministic".to_string(),
         });
     }
     BuiltUnit {
@@ -90,7 +88,6 @@ fn code_unit(evidence: &str, file: &str, anchor_symbol: Option<&str>) -> BuiltUn
         routing_text: String::new(),
         token_count: estimate_tokens(evidence),
         content_hash: hash_segments(&[evidence]),
-        atom_indices: Vec::new(),
         metadata: serde_json::json!({}),
         anchors,
     }
@@ -105,7 +102,6 @@ fn commit_units(store: &mut Store, repo: RepoId, locator: &str, units: &[BuiltUn
             content_hash: &hash_segments(&[locator, &units.len().to_string()]),
             modified_at: None,
             metadata: serde_json::json!({}),
-            atoms: &[],
             units,
         })
         .unwrap();
