@@ -105,7 +105,8 @@ fn four_source_packet_groups_orders_and_stays_in_budget() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let report = query(
         &store,
@@ -168,7 +169,8 @@ fn milestone_c_resumed_work_returns_prior_episode_with_code() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let report = query(
         &store,

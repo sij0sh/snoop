@@ -28,7 +28,8 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
     simple_fixture(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let response = handle_message(
         &store,

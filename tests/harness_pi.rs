@@ -60,7 +60,8 @@ fn sessions_index_as_episodes_with_references_not_evidence() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let episode_units: Vec<_> = store
         .unit_ids(outcome.repo_id)
@@ -132,7 +133,8 @@ fn sessions_table_populated_and_query_returns_agent_evidence() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let session_units = store
         .units_for_anchor(outcome.repo_id, "session", SESSION_ID, 32)
@@ -198,7 +200,8 @@ fn reindexing_unchanged_sessions_is_a_noop() {
     let before = store
         .unit_ids(store.first_repository().unwrap().unwrap().id)
         .unwrap();
-    let second = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let second =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(second.changed_sources, 0);
     assert_eq!(second.units_added, 0);
 

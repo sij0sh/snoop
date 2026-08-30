@@ -321,10 +321,16 @@ fn shell_children(atoms: &[ParsedAtom], index: usize) -> Vec<usize> {
 
 fn shell_header(atoms: &[ParsedAtom], index: usize, children: &[usize]) -> String {
     let atom = &atoms[index];
-    let Some(first_child) = children.iter().map(|child| atoms[*child].start_offset).min() else {
+    let Some(first_child) = children
+        .iter()
+        .map(|child| atoms[*child].start_offset)
+        .min()
+    else {
         return String::new();
     };
-    let end = first_child.saturating_sub(atom.start_offset).min(atom.text.len());
+    let end = first_child
+        .saturating_sub(atom.start_offset)
+        .min(atom.text.len());
     atom.text[..end].trim_end().to_string()
 }
 
@@ -389,9 +395,8 @@ fn imports_unit(
         .collect::<Vec<_>>()
         .join("\n");
     let evidence = format!("{locator} > imports\n\n{body}");
-    let routing = format!(
-        "source: code\npath: {locator}\nsymbol: {locator} > imports\nkind: imports"
-    );
+    let routing =
+        format!("source: code\npath: {locator}\nsymbol: {locator} > imports\nkind: imports");
     let mut unit = make_unit(
         UnitKind::Code,
         import_indices.to_vec(),

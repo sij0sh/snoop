@@ -545,12 +545,7 @@ fn span_body(source: &str, span: &SymbolSpan) -> String {
         .join("\n")
 }
 
-fn matches_rename(
-    before: &str,
-    old_span: &SymbolSpan,
-    after: &str,
-    new_span: &SymbolSpan,
-) -> bool {
+fn matches_rename(before: &str, old_span: &SymbolSpan, after: &str, new_span: &SymbolSpan) -> bool {
     let old_length = old_span.end_line.saturating_sub(old_span.start_line);
     let new_length = new_span.end_line.saturating_sub(new_span.start_line);
     old_length == new_length
@@ -1038,10 +1033,7 @@ pub fn ingest_commit(
             base_metadata["old_path"] = serde_json::json!(old);
         }
         for alignment in &aligned {
-            let display = alignment
-                .new_span
-                .as_ref()
-                .or(alignment.old_span.as_ref());
+            let display = alignment.new_span.as_ref().or(alignment.old_span.as_ref());
             let (header, routing, mut metadata) = match display {
                 Some(span) => (
                     format!("commit {short} {subject}\n\n{}\n\n", span.breadcrumb),
@@ -1053,7 +1045,7 @@ pub fn ingest_commit(
                         metadata["symbol_id"] = serde_json::json!(span.breadcrumb);
                         metadata["declaration_kind"] = serde_json::json!(span.kind.as_str());
                         metadata
-                    }
+                    },
                 ),
                 None => (
                     format!("commit {short} {subject}\n\n{}\n\n", file.path),
@@ -1062,12 +1054,11 @@ pub fn ingest_commit(
                         let mut metadata = base_metadata.clone();
                         metadata["strategy"] = serde_json::json!(alignment.strategy);
                         metadata
-                    }
+                    },
                 ),
             };
             metadata["change_kind"] = serde_json::json!(alignment.change_kind.as_str());
-            metadata["boundary_confidence"] =
-                serde_json::json!(alignment.confidence.as_str());
+            metadata["boundary_confidence"] = serde_json::json!(alignment.confidence.as_str());
             metadata["hunks"] = serde_json::json!(alignment
                 .hunk_indices
                 .iter()
@@ -1243,8 +1234,7 @@ mod tests {
             old_count: 3,
             new_start: 1,
             new_count: 3,
-            text: "@@ -1,3 +1,3 @@\n fn kept() {\n-    old_call();\n+    new_call();\n"
-                .to_string(),
+            text: "@@ -1,3 +1,3 @@\n fn kept() {\n-    old_call();\n+    new_call();\n".to_string(),
             start_offset: 0,
             end_offset: 0,
         }];

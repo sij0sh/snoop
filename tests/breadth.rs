@@ -12,7 +12,6 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poison| poison.into_inner())
 }
 
-
 #[test]
 fn python_and_typescript_symbols_are_retrievable() {
     let _guard = env_lock();
@@ -34,7 +33,8 @@ fn python_and_typescript_symbols_are_retrievable() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let report = query(
         &store,
@@ -86,4 +86,3 @@ fn python_and_typescript_symbols_are_retrievable() {
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
 }
-

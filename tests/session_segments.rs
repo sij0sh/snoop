@@ -1,6 +1,3 @@
-
-
-
 use snoop::core::UnitKind;
 use snoop::ingest::harness::{
     ingest_pi_session, MAX_EPISODES_PER_SESSION, SEGMENTATION_POLICY_VERSION,
@@ -18,7 +15,10 @@ fn multi_cycle_session() -> String {
     format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
         r#"{"type":"session","version":3,"id":"seg-e2e","cwd":"/tmp/repo"}"#,
-        line_user("u1", "Please investigate the failing refresh_session test and fix the root cause."),
+        line_user(
+            "u1",
+            "Please investigate the failing refresh_session test and fix the root cause."
+        ),
         line_text_plus_call("a1", &long, "c1", "read", r#""path":"src/auth.rs""#),
         line_result("r1", "c1", "read", "three matching call sites"),
         line_text_plus_call("a2", &long, "c2", "edit", r#""path":"src/auth.rs""#),
@@ -65,14 +65,22 @@ fn line_result(id: &str, call_id: &str, tool: &str, text: &str) -> String {
 #[test]
 fn multi_cycle_session_segments_into_work_cycles() {
     let (_, units) = ingest_pi_session(&multi_cycle_session(), "seg-e2e").unwrap();
-    assert_eq!(units.len(), 3, "boundary after investigation and after the failed validation");
+    assert_eq!(
+        units.len(),
+        3,
+        "boundary after investigation and after the failed validation"
+    );
     let reasons: Vec<&str> = units
         .iter()
         .map(|unit| unit.metadata["boundary_reason"].as_str().unwrap())
         .collect();
     assert_eq!(
         reasons,
-        ["investigate_to_modify", "failed_validation_to_edit", "episode_end"]
+        [
+            "investigate_to_modify",
+            "failed_validation_to_edit",
+            "episode_end"
+        ]
     );
     let phases: Vec<&str> = units
         .iter()
@@ -110,7 +118,11 @@ fn candidate_boundaries_are_recorded_for_every_boundary() {
     assert_eq!(selected, ["boundary_2", "boundary_4"]);
     let failed_flags: Vec<bool> = candidates
         .iter()
-        .map(|candidate| candidate["features"]["failed_validation"].as_bool().unwrap())
+        .map(|candidate| {
+            candidate["features"]["failed_validation"]
+                .as_bool()
+                .unwrap()
+        })
         .collect();
     assert_eq!(
         failed_flags,
@@ -118,7 +130,10 @@ fn candidate_boundaries_are_recorded_for_every_boundary() {
         "only the boundary after the failed validation carries the flag"
     );
     for candidate in candidates {
-        assert!(candidate["features"]["phase_transition"].as_str().unwrap().contains("->"));
+        assert!(candidate["features"]["phase_transition"]
+            .as_str()
+            .unwrap()
+            .contains("->"));
         assert!(candidate["features"]["left_tokens"].is_u64());
     }
 }
@@ -135,7 +150,9 @@ fn segment_ranges_partition_the_episode() {
             "child ranges must be contiguous inside one episode"
         );
     }
-    assert!(segments[0]["start_byte"].as_u64().unwrap() < segments[2]["end_byte"].as_u64().unwrap());
+    assert!(
+        segments[0]["start_byte"].as_u64().unwrap() < segments[2]["end_byte"].as_u64().unwrap()
+    );
 }
 
 #[test]
@@ -174,18 +191,23 @@ fn appending_events_leaves_sealed_segments_unchanged() {
         sealed.is_subset(&resealed),
         "sealed segment ids must survive the append"
     );
-    let before_hashes: std::collections::HashSet<&str> =
-        before.1.iter().map(|unit| unit.content_hash.as_str()).collect();
-    let after_hashes: std::collections::HashSet<&str> =
-        after.1.iter().map(|unit| unit.content_hash.as_str()).collect();
+    let before_hashes: std::collections::HashSet<&str> = before
+        .1
+        .iter()
+        .map(|unit| unit.content_hash.as_str())
+        .collect();
+    let after_hashes: std::collections::HashSet<&str> = after
+        .1
+        .iter()
+        .map(|unit| unit.content_hash.as_str())
+        .collect();
     assert!(before_hashes.is_subset(&after_hashes));
 }
 
 #[test]
 fn episode_cap_retains_the_newest_episodes() {
-    let mut lines = vec![
-        r#"{"type":"session","version":3,"id":"seg-cap","cwd":"/tmp/repo"}"#.to_string(),
-    ];
+    let mut lines =
+        vec![r#"{"type":"session","version":3,"id":"seg-cap","cwd":"/tmp/repo"}"#.to_string()];
     for index in 0..210 {
         lines.push(line_user(
             &format!("u{index}"),
@@ -198,8 +220,7 @@ fn episode_cap_retains_the_newest_episodes() {
     let first_episode = atoms[0].metadata["episode"].as_u64().unwrap();
     assert_eq!(first_episode, 11, "the oldest ten episodes are dropped");
     assert_eq!(
-        atoms[0].breadcrumb,
-        "pi-session:seg-cap > episode 11",
+        atoms[0].breadcrumb, "pi-session:seg-cap > episode 11",
         "retained episodes keep their absolute numbering"
     );
     let last_episode = atoms.last().unwrap().metadata["episode"].as_u64().unwrap();
@@ -220,9 +241,9 @@ fn oversized_single_message_splits_into_bounded_pieces() {
         units.iter().all(|unit| unit.token_count <= MAX_TOKENS),
         "every piece stays inside the hard maximum"
     );
-    assert!(units.iter().all(|unit| {
-        unit.metadata["boundary_reason"] == "message_split_last_resort"
-    }));
+    assert!(units
+        .iter()
+        .all(|unit| { unit.metadata["boundary_reason"] == "message_split_last_resort" }));
 }
 
 #[test]

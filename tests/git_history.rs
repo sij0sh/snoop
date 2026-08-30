@@ -109,7 +109,8 @@ fn git_history_indexes_symbol_units_and_falls_back() {
     fixture_repo(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let survey = survey(&store, outcome.repo_id);
     assert!(
@@ -153,7 +154,8 @@ fn git_history_indexes_symbol_units_and_falls_back() {
     );
 
     let before = store.unit_ids(outcome.repo_id).unwrap();
-    let second = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let second =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(second.changed_sources, 0, "reindex processes nothing");
     assert_eq!(second.units_added, 0);
     assert_eq!(store.unit_ids(outcome.repo_id).unwrap(), before);
@@ -172,7 +174,8 @@ fn deleted_file_commits_do_not_block_indexing() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     let survey = survey(&store, outcome.repo_id);
     assert!(
         survey.removal_units > 0,

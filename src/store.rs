@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::core::{
-    AnchorKind, AtomId, BuiltUnit, ParsedAtom, RepoId, Repository, RetrievalUnit,
-    Source, SourceId, SourceKind, UnitId, UnitKind,
+    AnchorKind, AtomId, BuiltUnit, ParsedAtom, RepoId, Repository, RetrievalUnit, Source, SourceId,
+    SourceKind, UnitId, UnitKind,
 };
 
 pub struct Store {
@@ -205,14 +205,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         let Some((target, sql)) = migration_after(version) else {
             return Ok(());
         };
-        
-        
-        
+
         conn.execute_batch("BEGIN IMMEDIATE")?;
-        let locked_version: i64 =
-            conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let locked_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if locked_version != version {
-            
             conn.execute_batch("ROLLBACK")?;
             continue;
         }
@@ -944,7 +940,6 @@ impl Store {
         rows.collect()
     }
 
-
     pub fn anchors_for_unit(&self, unit_id: i64) -> rusqlite::Result<Vec<(String, String, i64)>> {
         let mut statement = self.conn.prepare(
             "SELECT a.anchor_kind, a.anchor_id, a.relationship, a.confidence_source
@@ -1110,8 +1105,8 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingest::{LockedError, index_embeddings, index_repository_bounded};
-    use crate::inference::{Embedder, EmbedResult};
+    use crate::inference::{EmbedResult, Embedder};
+    use crate::ingest::{index_embeddings, index_repository_bounded, LockedError};
     use std::time::Instant;
 
     fn epoch_secs() -> i64 {
@@ -1603,7 +1598,10 @@ mod tests {
         let started = Instant::now();
         let mut sighting = None;
         while sighting.is_none() {
-            assert!(started.elapsed() < Duration::from_secs(15), "lease row never appeared");
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "lease row never appeared"
+            );
             sighting = lease_row(&observer, repo);
             std::thread::sleep(Duration::from_millis(100));
         }

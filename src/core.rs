@@ -281,7 +281,6 @@ pub struct ContextPacket {
     pub budget: usize,
 }
 
-
 pub fn hash_segments(segments: &[&str]) -> String {
     let mut hasher = blake3::Hasher::new();
     for segment in segments {
@@ -290,4 +289,3 @@ pub fn hash_segments(segments: &[&str]) -> String {
     }
     hasher.finalize().to_hex().to_string()
 }
-

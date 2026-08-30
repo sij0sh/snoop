@@ -7,8 +7,6 @@ use snoop::ingest::{index_repository_bounded, scanner, LockedError};
 use snoop::runtime::{query, QueryChannels, QueryOptions};
 use snoop::store::Store;
 
-
-
 const DEFAULT_ENSURE_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Parser)]
@@ -144,9 +142,6 @@ fn embedder() -> Option<Box<dyn Embedder>> {
     }
 }
 
-
-
-
 fn print_ensure_error(message: String) -> ! {
     println!(
         "{}",
@@ -193,11 +188,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 skipped
             );
         }
-        Command::Index {
-            path,
-            db,
-            repo,
-        } => {
+        Command::Index { path, db, repo } => {
             let mut store = open_store(&db_path(db))?;
             let root = match path {
                 Some(path) => scanner::repository_root(&path)?,
@@ -304,11 +295,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             } else {
                 QueryChannels::for_embedder(embedder.as_deref())
             };
-            let report = query(&store, repository.id, embedder.as_deref(), &query_text, &QueryOptions {
-                channels,
-                top_n: top,
-                max_tokens: tokens,
-            })?;
+            let report = query(
+                &store,
+                repository.id,
+                embedder.as_deref(),
+                &query_text,
+                &QueryOptions {
+                    channels,
+                    top_n: top,
+                    max_tokens: tokens,
+                },
+            )?;
             if explain {
                 eprintln!("{}", serde_json::to_string_pretty(&report.debug)?);
             }

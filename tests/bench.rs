@@ -407,12 +407,7 @@ fn classify_miss(
 ) -> &'static str {
     let query = &QUESTIONS[question_index].query;
     let lexical: Vec<i64> = store
-        .fts_search(
-            repo,
-            "evidence_text",
-            query,
-            options.top_n,
-        )
+        .fts_search(repo, "evidence_text", query, options.top_n)
         .unwrap()
         .into_iter()
         .map(|(id, _)| id)
@@ -542,7 +537,9 @@ fn benchmark_config_table() {
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = env_embedder();
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(embedder.as_ref()), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(embedder.as_ref()), None)
+            .unwrap();
 
     let stats = store.stats_for_repo(outcome.repo_id).unwrap();
     println!(

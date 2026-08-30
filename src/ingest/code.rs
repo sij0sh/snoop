@@ -5,13 +5,7 @@ use tree_sitter::{Node, Parser};
 
 use crate::core::{AtomKind, ParsedAtom};
 
-
-
-pub const CODE_EXTENSIONS: &[&str] = &[
-    "rs", "py", "pyi", "pyw", "ts", "tsx", "mts", "cts",
-];
-
-
+pub const CODE_EXTENSIONS: &[&str] = &["rs", "py", "pyi", "pyw", "ts", "tsx", "mts", "cts"];
 
 struct Language {
     name: &'static str,
@@ -109,8 +103,6 @@ fn field_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
     }
     None
 }
-
-
 
 fn sibling_context(node: Node<'_>, source: &str, kinds: &[&str]) -> Option<Range<usize>> {
     let mut left = node;
@@ -458,8 +450,6 @@ fn line_of(source: &str, byte: usize) -> u32 {
         + 1
 }
 
-
-
 #[derive(Debug, Clone)]
 pub struct CodeBoundary {
     pub language: String,
@@ -515,14 +505,12 @@ fn boundaries_from_atoms(path: &str, source: &str, atoms: &[ParsedAtom]) -> Vec<
                 language: language.clone(),
                 kind: atom.kind,
                 symbol_id: atom.breadcrumb.clone(),
-                display_name: atom
-                    .metadata["symbol"]
+                display_name: atom.metadata["symbol"]
                     .as_str()
                     .unwrap_or_default()
                     .to_string(),
                 qualified_name,
-                signature: atom
-                    .metadata["signature"]
+                signature: atom.metadata["signature"]
                     .as_str()
                     .filter(|value| !value.is_empty())
                     .map(String::from),
@@ -682,12 +670,28 @@ impl Debug for Item { fn fmt(&self) {} }
 
     #[test]
     fn code_extensions_cover_the_shared_registry() {
-        for locator in ["a.rs", "a.py", "a.pyi", "a.pyw", "a.ts", "a.tsx", "a.mts", "a.cts"] {
+        for locator in [
+            "a.rs", "a.py", "a.pyi", "a.pyw", "a.ts", "a.tsx", "a.mts", "a.cts",
+        ] {
             assert!(supports_code_path(locator), "{locator} must be supported");
         }
         for locator in [
-            "a.md", "a.txt", "README", "a.json", ".gitignore", "a.js", "a.jsx", "a.mjs", "a.cjs",
-            "a.go", "a.java", "a.c", "a.cs", "a.php", "a.sh", "a.tf",
+            "a.md",
+            "a.txt",
+            "README",
+            "a.json",
+            ".gitignore",
+            "a.js",
+            "a.jsx",
+            "a.mjs",
+            "a.cjs",
+            "a.go",
+            "a.java",
+            "a.c",
+            "a.cs",
+            "a.php",
+            "a.sh",
+            "a.tf",
         ] {
             assert!(!supports_code_path(locator), "{locator} must not be code");
         }
@@ -697,8 +701,7 @@ impl Debug for Item { fn fmt(&self) {} }
 
     #[test]
     fn analyze_code_projects_qualified_boundaries() {
-        let source =
-            "class TokenStore:\n    def refresh(self, token):\n        validate(token)\n";
+        let source = "class TokenStore:\n    def refresh(self, token):\n        validate(token)\n";
         let boundaries = analyze_code("src/store.py", source).unwrap();
         let refresh = boundaries
             .iter()
@@ -718,7 +721,10 @@ impl Debug for Item { fn fmt(&self) {} }
             .any(|reference| reference == "validate"));
         assert_eq!(*refresh.line_range.start(), 2);
         assert_eq!(*refresh.line_range.end(), 3);
-        assert_eq!(refresh.byte_range.start, source.find("def refresh").unwrap());
+        assert_eq!(
+            refresh.byte_range.start,
+            source.find("def refresh").unwrap()
+        );
     }
 
     #[test]
@@ -740,10 +746,7 @@ impl Debug for Item { fn fmt(&self) {} }
             .iter()
             .find(|boundary| boundary.display_name == "Store")
             .unwrap();
-        assert_eq!(
-            &python[store.leading_context.clone().unwrap()],
-            "@cached\n"
-        );
+        assert_eq!(&python[store.leading_context.clone().unwrap()], "@cached\n");
 
         let typescript = "/** Loads config. */\nfunction load() {}\n";
         let ts_boundaries = analyze_code("src/load.ts", typescript).unwrap();

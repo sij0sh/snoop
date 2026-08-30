@@ -13,8 +13,6 @@ use crate::ingest::units::{
 pub const MAX_SESSION_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_EPISODES_PER_SESSION: usize = 200;
 
-
-
 pub const SEGMENTATION_POLICY_VERSION: &str = "session-seg-v1";
 
 const DEFAULT_SESSIONS_ROOT: &str = ".pi/agent/sessions";
@@ -148,7 +146,6 @@ struct ContentBlock {
     tool_use_id: Option<String>,
     #[serde(default, rename = "toolName")]
     tool_name: Option<String>,
-    
 }
 
 fn parse_timestamp(value: &str) -> Option<i64> {
@@ -171,10 +168,6 @@ fn parse_timestamp(value: &str) -> Option<i64> {
     let days = era * 146_097 + day_of_era - 719_468;
     Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
-
-
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventKind {
@@ -199,7 +192,7 @@ impl EventKind {
 struct EpisodeEvent {
     id: String,
     kind: EventKind,
-    
+
     group: u32,
     start_byte: usize,
     end_byte: usize,
@@ -241,8 +234,7 @@ impl EpisodeEvent {
 #[derive(Debug, Clone)]
 struct EpisodeTurn {
     role: String,
-    
-    
+
     absolute_index: usize,
     timestamp: Option<i64>,
     events: Vec<EpisodeEvent>,
@@ -316,7 +308,11 @@ impl EpisodeTurn {
         if text.is_empty() {
             return text;
         }
-        if !self.events.iter().any(|event| event.kind == EventKind::UserText) {
+        if !self
+            .events
+            .iter()
+            .any(|event| event.kind == EventKind::UserText)
+        {
             text = format!("(no user turn)\n{text}");
         }
         text
@@ -459,10 +455,6 @@ fn read_session_id(path: &Path) -> Option<String> {
     (!id.is_empty()).then_some(id)
 }
 
-
-
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Orient,
@@ -588,8 +580,6 @@ fn classify_command_segment(segment: &str) -> Option<Phase> {
     None
 }
 
-
-
 fn classify_command(command: &str) -> Option<Phase> {
     let mut strongest: Option<Phase> = None;
     for part in command.split(['\n', ';', '|', '&']) {
@@ -635,14 +625,10 @@ fn strongest_phase(current: Option<Phase>, candidate: Option<Phase>) -> Option<P
     }
 }
 
-
-
-
-
 #[derive(Debug, Clone)]
 struct ActivityBundle {
     event_indices: Vec<usize>,
-    
+
     signal: Option<Phase>,
     phase: Phase,
     files: Vec<String>,
@@ -658,10 +644,6 @@ impl ActivityBundle {
     }
 }
 
-
-
-
-
 fn activity_bundles(events: &[EpisodeEvent]) -> Vec<ActivityBundle> {
     let mut bundles: Vec<ActivityBundle> = Vec::new();
     let mut index = 0;
@@ -673,18 +655,15 @@ fn activity_bundles(events: &[EpisodeEvent]) -> Vec<ActivityBundle> {
             indices.push(index);
             index += 1;
         }
-        
+
         while let Some(event) = events.get(index) {
             let pairs = event.kind == EventKind::ToolResult
-                && event
-                    .call_id
-                    .as_deref()
-                    .is_some_and(|call_id| {
-                        indices.iter().any(|i| {
-                            events[*i].kind == EventKind::ToolCall
-                                && events[*i].call_id.as_deref() == Some(call_id)
-                        })
-                    });
+                && event.call_id.as_deref().is_some_and(|call_id| {
+                    indices.iter().any(|i| {
+                        events[*i].kind == EventKind::ToolCall
+                            && events[*i].call_id.as_deref() == Some(call_id)
+                    })
+                });
             if !pairs {
                 break;
             }
@@ -804,13 +783,8 @@ fn bundle_body(events: &[EpisodeEvent], bundle: &ActivityBundle) -> String {
     text
 }
 
-
-
-
-
 #[derive(Debug, Clone)]
 struct BoundaryCandidate {
-    
     after_bundle: usize,
     score: i32,
     failed_validation: bool,
@@ -821,7 +795,7 @@ struct BoundaryCandidate {
 #[derive(Debug, Clone)]
 struct SegmentDraft {
     start_bundle: usize,
-    
+
     end_bundle: usize,
     boundary_reason: &'static str,
 }
@@ -862,8 +836,6 @@ fn boundary_score(
     (score, failed_validation, file_set_change)
 }
 
-
-
 fn select_segments(
     bundles: &[ActivityBundle],
     bundle_tokens: &[usize],
@@ -890,21 +862,26 @@ fn select_segments(
         let work_cycle = !overflow
             && left_tokens >= SEGMENT_MIN_TOKENS
             && matches!(right.phase, Phase::Modify | Phase::Revise)
-            && matches!(bundles[boundary - 1].phase, Phase::Validate | Phase::Investigate);
+            && matches!(
+                bundles[boundary - 1].phase,
+                Phase::Validate | Phase::Investigate
+            );
         let resolution =
             !overflow && right.phase == Phase::Resolve && left_tokens >= SEGMENT_TARGET_TOKENS;
-        let file_split =
-            !overflow && file_change && left_tokens >= SEGMENT_TARGET_TOKENS;
+        let file_split = !overflow && file_change && left_tokens >= SEGMENT_TARGET_TOKENS;
 
         let cut_at = if overflow {
-            
             let winner = candidates
                 .iter()
                 .filter(|candidate| candidate.after_bundle >= start)
                 .min_by(|a, b| {
                     b.score
                         .cmp(&a.score)
-                        .then(a.left_tokens.abs_diff(SEGMENT_TARGET_TOKENS).cmp(&b.left_tokens.abs_diff(SEGMENT_TARGET_TOKENS)))
+                        .then(
+                            a.left_tokens
+                                .abs_diff(SEGMENT_TARGET_TOKENS)
+                                .cmp(&b.left_tokens.abs_diff(SEGMENT_TARGET_TOKENS)),
+                        )
                         .then(a.after_bundle.cmp(&b.after_bundle))
                 });
             winner.map(|candidate| candidate.after_bundle + 1)
@@ -948,18 +925,18 @@ fn select_segments(
         boundary_reason: "episode_end",
     });
 
-    
-    
     while drafts.len() > 1 {
         let last = drafts.last().unwrap();
-        let last_tokens: usize =
-            bundle_tokens[last.start_bundle..last.end_bundle].iter().sum();
+        let last_tokens: usize = bundle_tokens[last.start_bundle..last.end_bundle]
+            .iter()
+            .sum();
         if last_tokens >= SEGMENT_MIN_TOKENS {
             break;
         }
         let previous = &drafts[drafts.len() - 2];
-        let previous_tokens: usize =
-            bundle_tokens[previous.start_bundle..previous.end_bundle].iter().sum();
+        let previous_tokens: usize = bundle_tokens[previous.start_bundle..previous.end_bundle]
+            .iter()
+            .sum();
         if previous_tokens + last_tokens > MAX_TOKENS {
             break;
         }
@@ -983,7 +960,11 @@ fn overflow_reason(
     let Some(winner) = candidates
         .iter()
         .filter(|candidate| candidate.after_bundle >= start)
-        .min_by(|a, b| b.score.cmp(&a.score).then(a.after_bundle.cmp(&b.after_bundle)))
+        .min_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then(a.after_bundle.cmp(&b.after_bundle))
+        })
     else {
         return "token_limit";
     };
@@ -999,10 +980,6 @@ fn overflow_reason(
         "token_limit"
     }
 }
-
-
-
-
 
 struct PlannedSegment {
     segment_id: String,
@@ -1079,13 +1056,11 @@ fn planned_segments(
         let header = format!("{breadcrumb} > segment {}", position + 1);
         let tokens = estimate_tokens(&format!("{header}\n\n{body}"));
         if tokens > MAX_TOKENS {
-            
-            
-            
             let max_chars = (MAX_TOKENS * 4)
                 .saturating_sub(header.chars().count() + 2)
                 .max(1);
-            for (piece, (piece_text, _, _)) in split_oversized(&body, max_chars).into_iter().enumerate()
+            for (piece, (piece_text, _, _)) in
+                split_oversized(&body, max_chars).into_iter().enumerate()
             {
                 let segment_key = if piece == 0 {
                     start_event_id.clone()
@@ -1344,8 +1319,6 @@ fn seal_episode(episodes: &mut Vec<EpisodeTurn>, current: &mut Option<EpisodeTur
     }
 }
 
-
-
 fn finalize_episode_cap(episodes: &mut Vec<EpisodeTurn>) {
     if episodes.len() > MAX_EPISODES_PER_SESSION {
         let excess = episodes.len() - MAX_EPISODES_PER_SESSION;
@@ -1514,8 +1487,7 @@ fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                     .enumerate()
                     .map(|(position, block)| {
                         let name = block.name.as_deref().unwrap_or("unknown");
-                        let arguments =
-                            block.arguments.clone().unwrap_or(serde_json::Value::Null);
+                        let arguments = block.arguments.clone().unwrap_or(serde_json::Value::Null);
                         let call_id = block_call_id(block)
                             .unwrap_or_else(|| format!("{event_id}:c{position}"));
                         (call_id, tool_ref(name, &arguments))
@@ -1572,15 +1544,8 @@ fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                 let call_id: Option<String> = message
                     .tool_call_id
                     .clone()
-                    .or_else(|| {
-                        message
-                            .content
-                            .iter()
-                            .find_map(block_result_id)
-                    });
-                let command = call_id
-                    .as_deref()
-                    .and_then(|id| pending_bash.remove(id));
+                    .or_else(|| message.content.iter().find_map(block_result_id));
+                let command = call_id.as_deref().and_then(|id| pending_bash.remove(id));
                 let is_bash = command.is_some()
                     || message.tool_name.as_deref() == Some("bash")
                     || message
@@ -1681,8 +1646,8 @@ mod tests {
             r#"{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall","id":"c2","name":"bash","arguments":{"command":"cargo build"}}]}}"#,
         );
         let unstructured_result = r#"{"type":"message","id":"r2","message":{"role":"toolResult","content":[{"type":"toolResult","toolCallId":"c2","toolName":"bash","text":"compile finished in one line of prose"}]}}"#;
-        let (_, units) = ingest_pi_session(&format!("{structured}\n{unstructured_result}"), "s2")
-            .unwrap();
+        let (_, units) =
+            ingest_pi_session(&format!("{structured}\n{unstructured_result}"), "s2").unwrap();
         assert_eq!(units.len(), 1, "one segment for the single-bundle episode");
         let outcomes = units[0].metadata["outcomes"].as_array().unwrap();
         assert_eq!(outcomes.len(), 2);
@@ -1717,21 +1682,20 @@ mod tests {
         for unit in &units {
             assert_eq!(unit.kind, UnitKind::EpisodeSegment);
             assert_eq!(unit.metadata["policy_version"], SEGMENTATION_POLICY_VERSION);
-            assert!(unit.metadata["segment_id"].as_str().is_some_and(|id| !id.is_empty()));
+            assert!(unit.metadata["segment_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()));
             assert!(unit.metadata["source_range"]["start_byte"].is_u64());
             assert!(unit.routing_text.contains("source: agent_episode_segment"));
             assert!(unit.routing_text.contains("phase: "));
         }
         for atom in &atoms {
             assert_eq!(atom.metadata["segment_policy"], SEGMENTATION_POLICY_VERSION);
-            assert!(!atom.metadata["segments"]
-                .as_array()
-                .unwrap()
-                .is_empty());
+            assert!(!atom.metadata["segments"].as_array().unwrap().is_empty());
             assert!(!atom.metadata["events"].as_array().unwrap().is_empty());
             assert!(atom.metadata["candidate_boundaries"].as_array().is_some());
         }
-        
+
         let by_episode: BTreeSet<u64> = units
             .iter()
             .map(|unit| unit.metadata["episode"].as_u64().unwrap())
@@ -1798,8 +1762,14 @@ mod tests {
         assert_eq!(classify_command("pytest -q"), Some(Phase::Validate));
         assert_eq!(classify_command("git status"), Some(Phase::Investigate));
         assert_eq!(classify_command("rg foo src/"), Some(Phase::Investigate));
-        assert_eq!(classify_command("sed -i 's/a/b/' f.rs"), Some(Phase::Modify));
-        assert_eq!(classify_command("git add -A && cargo test"), Some(Phase::Validate));
+        assert_eq!(
+            classify_command("sed -i 's/a/b/' f.rs"),
+            Some(Phase::Modify)
+        );
+        assert_eq!(
+            classify_command("git add -A && cargo test"),
+            Some(Phase::Validate)
+        );
         assert_eq!(classify_command("git add src/auth.rs"), Some(Phase::Modify));
         assert_eq!(classify_command("echo hello"), None);
     }
@@ -1807,9 +1777,7 @@ mod tests {
     #[test]
     fn bundles_never_split_a_call_from_its_result() {
         let (_, units) = ingest_pi_session(SAMPLE, "s1").unwrap();
-        
-        
-        
+
         let first_episode: Vec<&BuiltUnit> = units
             .iter()
             .filter(|unit| unit.metadata["episode"] == 1)
@@ -1856,18 +1824,24 @@ mod tests {
         ]
             .join("\n");
         let (_, units) = ingest_pi_session(&session, "s3").unwrap();
-        assert!(units.len() >= 2, "expected a cut after the failed validation");
+        assert!(
+            units.len() >= 2,
+            "expected a cut after the failed validation"
+        );
         let cut = units
             .iter()
             .find(|unit| unit.metadata["boundary_reason"] == "failed_validation_to_edit");
-        assert!(cut.is_some(), "boundary reasons: {:?}", units
-            .iter()
-            .map(|unit| unit.metadata["boundary_reason"].clone())
-            .collect::<Vec<_>>());
-        
+        assert!(
+            cut.is_some(),
+            "boundary reasons: {:?}",
+            units
+                .iter()
+                .map(|unit| unit.metadata["boundary_reason"].clone())
+                .collect::<Vec<_>>()
+        );
+
         let failed_segment = cut.unwrap();
         assert!(failed_segment.evidence_text.contains("Outcome: failed"));
         assert!(failed_segment.evidence_text.contains("edit src/auth.rs"));
     }
-
 }

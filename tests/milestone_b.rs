@@ -68,7 +68,8 @@ fn anchors_are_emitted_for_every_source_kind() {
     fixture(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let mut kinds = std::collections::HashSet::new();
     let mut confidence_seen = false;
@@ -117,7 +118,8 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
     fixture(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let report = query(
         &store,

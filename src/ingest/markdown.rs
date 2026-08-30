@@ -304,9 +304,7 @@ pub fn parse_markdown(src: &str, title: &str) -> ParseOutput {
         }
     }
 
-    ParseOutput {
-        atoms,
-    }
+    ParseOutput { atoms }
 }
 
 #[cfg(test)]

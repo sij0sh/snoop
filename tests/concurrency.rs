@@ -42,7 +42,12 @@ fn run_ensure(
     db: &Path,
 ) -> (std::process::ExitStatus, serde_json::Value) {
     let output = Command::new(binary)
-        .args(["ensure", repo.to_str().unwrap(), "--db", db.to_str().unwrap()])
+        .args([
+            "ensure",
+            repo.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
         .env("SNOOP_EMBED_URL", "mock")
         .output()
         .unwrap();
@@ -77,7 +82,12 @@ fn cold_start_overlap_admits_exactly_one_indexer() {
     let binary = env!("CARGO_BIN_EXE_snoop");
 
     let winner = Command::new(binary)
-        .args(["ensure", repo.to_str().unwrap(), "--db", db.to_str().unwrap()])
+        .args([
+            "ensure",
+            repo.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
         .env("SNOOP_EMBED_URL", "mock")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -115,7 +125,10 @@ fn cold_start_overlap_admits_exactly_one_indexer() {
 
     let (status, report) = run_ensure(binary, &repo, &db);
     assert!(status.success(), "{report}");
-    assert_eq!(report["status"], "up-to-date", "the winner's commit is complete");
+    assert_eq!(
+        report["status"], "up-to-date",
+        "the winner's commit is complete"
+    );
 }
 
 #[test]
@@ -163,7 +176,10 @@ fn ensure_waits_out_a_held_write_transaction_then_succeeds() {
     holder.join().unwrap();
     let (status, report) = run_ensure(binary, &repo, &db);
     assert!(status.success(), "{report}");
-    assert_eq!(report["status"], "up-to-date", "the waited-out run committed");
+    assert_eq!(
+        report["status"], "up-to-date",
+        "the waited-out run committed"
+    );
 }
 
 #[test]

@@ -43,7 +43,8 @@ fn indexes_incrementally_and_queries_four_channels() {
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
 
-    let first = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let first =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(first.changed_sources, 2);
     assert_eq!(first.unchanged_sources, 0);
     assert!(first.units_added >= 4);
@@ -55,7 +56,8 @@ fn indexes_incrementally_and_queries_four_channels() {
         .unwrap()
         .unwrap()
         .id;
-    let second = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let second =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(second.changed_sources, 0);
     assert_eq!(second.unchanged_sources, 2);
     assert_eq!(second.embedded, 0);
@@ -119,14 +121,16 @@ fn indexes_incrementally_and_queries_four_channels() {
         "# Session policy\n\nRefresh tokens are validated before rotation.\n\n## Order\n\nValidation is first.\n",
     )
     .unwrap();
-    let third = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let third =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(third.changed_sources, 1);
     assert_eq!(third.unchanged_sources, 1);
     assert!(third.embedded > 0);
     assert_eq!(store.stats().unwrap().sources, before.sources);
 
     std::fs::remove_file(directory.path().join("README.md")).unwrap();
-    let fourth = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let fourth =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(fourth.deleted_sources, 1);
     assert_eq!(store.stats().unwrap().sources, before.sources - 1);
 }
@@ -137,11 +141,13 @@ fn index_format_version_forces_a_rebuild() {
     fixture(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let first = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let first =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     store
         .set_repository_content_version(first.repo_id, "obsolete")
         .unwrap();
-    let rebuilt = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let rebuilt =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(rebuilt.changed_sources, 2);
     assert_eq!(rebuilt.unchanged_sources, 0);
 }
@@ -152,7 +158,8 @@ fn deterministic_routing_changes_the_top_one_on_a_vocabulary_fixture() {
     fixture(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let indexed = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let indexed =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     let options = |channels| QueryOptions {
         channels,
         top_n: 10,

@@ -23,7 +23,8 @@ fn git(root: &Path, args: &[&str]) {
 }
 
 const AUTH_V1: &str = "pub fn refresh_session() {\n    validate();\n}\n\nfn validate() {\n    true\n}\n\nfn rotate() {\n    rotate_key();\n}\n";
-const AUTH_V2: &str = "pub fn refresh_session() {\n    validate();\n}\n\nfn validate() {\n    true\n}\n";
+const AUTH_V2: &str =
+    "pub fn refresh_session() {\n    validate();\n}\n\nfn validate() {\n    true\n}\n";
 const AUTH_V3: &str =
     "pub fn refresh_session() {\n    verify_session();\n}\n\nfn verify_session() {\n    true\n}\n";
 
@@ -88,7 +89,10 @@ fn git_changes(store: &Store, repo: RepoId) -> Vec<Change> {
                 .as_str()
                 .unwrap_or_default()
                 .to_string(),
-            path: unit.metadata["path"].as_str().unwrap_or_default().to_string(),
+            path: unit.metadata["path"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
             old_path: unit.metadata["old_path"].as_str().map(str::to_string),
             symbol_id: unit.metadata["symbol_id"].as_str().map(str::to_string),
             old_symbol: unit.metadata["old_symbol"].as_str().map(str::to_string),
@@ -103,7 +107,8 @@ fn git_changes(store: &Store, repo: RepoId) -> Vec<Change> {
 fn indexed_changes(directory: &tempfile::TempDir) -> Vec<Change> {
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     git_changes(&store, outcome.repo_id)
 }
 
@@ -151,7 +156,10 @@ fn renamed_symbols_match_across_names() {
         renamed.symbol_id.as_deref(),
         Some("src/auth.rs > verify_session")
     );
-    assert_eq!(renamed.old_symbol.as_deref(), Some("src/auth.rs > validate"));
+    assert_eq!(
+        renamed.old_symbol.as_deref(),
+        Some("src/auth.rs > validate")
+    );
 }
 
 #[test]
@@ -190,7 +198,8 @@ fn git_symbol_ids_match_code_unit_identities() {
     alignment_repo(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     let mut code_identity: Option<String> = None;
     for id in store.unit_ids(outcome.repo_id).unwrap() {
         let unit = store.unit_by_id(id).unwrap().unwrap();
@@ -218,7 +227,8 @@ fn git_indexing_is_deterministic() {
     fn survey(directory: &tempfile::TempDir) -> Vec<(String, String, String)> {
         let mut store = Store::open_in_memory().unwrap();
         let embedder = MockEmbedder::new("mock-v1");
-        let outcome = index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+        let outcome =
+            index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
         let mut rows = Vec::new();
         for id in store.unit_ids(outcome.repo_id).unwrap() {
             let unit = store.unit_by_id(id).unwrap().unwrap();

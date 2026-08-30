@@ -414,7 +414,10 @@ fn index_command_refuses_inside_held_lease_without_writing_run_row() {
             "index must be refused while another indexer holds the lease"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("locked"), "stderr must name the lock: {stderr}");
+        assert!(
+            stderr.contains("locked"),
+            "stderr must name the lock: {stderr}"
+        );
 
         let runs_after = store.stats_for_repo(repository.id).unwrap().index_runs;
         assert_eq!(
@@ -460,7 +463,12 @@ fn init_skips_undecodable_source_indexes_the_rest_and_reports_it() {
     }
 
     let output = Command::new(binary)
-        .args(["index", repo.to_str().unwrap(), "--db", db.to_str().unwrap()])
+        .args([
+            "index",
+            repo.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
         .env("SNOOP_EMBED_URL", "mock")
         .output()
         .unwrap();
@@ -476,7 +484,12 @@ fn init_skips_undecodable_source_indexes_the_rest_and_reports_it() {
     );
 
     let output = Command::new(binary)
-        .args(["ensure", repo.to_str().unwrap(), "--db", db.to_str().unwrap()])
+        .args([
+            "ensure",
+            repo.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
         .env("SNOOP_EMBED_URL", "mock")
         .output()
         .unwrap();
@@ -684,7 +697,11 @@ fn cli_inspect_unit_is_scoped_to_the_selected_repository() {
     let repo_b = directory.path().join("repo-b");
     std::fs::create_dir(&repo_a).unwrap();
     std::fs::create_dir(&repo_b).unwrap();
-    std::fs::write(repo_a.join("alpha.rs"), "pub fn alpha_only() -> u32 { 1 }\n").unwrap();
+    std::fs::write(
+        repo_a.join("alpha.rs"),
+        "pub fn alpha_only() -> u32 { 1 }\n",
+    )
+    .unwrap();
     std::fs::write(repo_b.join("beta.rs"), "pub fn beta_only() -> u32 { 2 }\n").unwrap();
     let db = directory.path().join("c5.db");
     let binary = env!("CARGO_BIN_EXE_snoop");
@@ -771,10 +788,7 @@ fn cli_inspect_unit_is_scoped_to_the_selected_repository() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("\"locator\": \"beta.rs\""),
-        "{stdout}"
-    );
+    assert!(stdout.contains("\"locator\": \"beta.rs\""), "{stdout}");
     assert!(
         !stdout.contains("\"anchors\": []"),
         "same-repo inspect must keep anchors: {stdout}"
