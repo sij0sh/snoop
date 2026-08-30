@@ -90,11 +90,9 @@ pub(super) struct EpisodeEvent {
 
 #[derive(Debug, Clone)]
 pub(super) struct EpisodeTurn {
-    pub(super) absolute_index: usize,
     pub(super) timestamp: Option<i64>,
     pub(super) events: Vec<EpisodeEvent>,
 }
-
 impl EpisodeTurn {
     pub(super) fn user_text(&self) -> &str {
         self.events
@@ -363,7 +361,6 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                 }
                 seal_turn(&mut turns, &mut current);
                 current = Some(EpisodeTurn {
-                    absolute_index: turns.len(),
                     timestamp,
                     events: vec![EpisodeEvent {
                         id: event_id,
@@ -414,7 +411,6 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                 }
                 if current.is_none() {
                     current = Some(EpisodeTurn {
-                        absolute_index: turns.len(),
                         timestamp,
                         events: Vec::new(),
                     });
