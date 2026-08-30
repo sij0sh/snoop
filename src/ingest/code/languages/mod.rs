@@ -1,4 +1,5 @@
-//! Language registry: extensions, grammars, and per-language AST callbacks.
+//! Language adapters: per-language AST classification, symbols, context,
+//! and atomic ranges. The extension registry lives in `registry`.
 
 use std::ops::Range;
 
@@ -7,24 +8,15 @@ use tree_sitter::Node;
 use crate::core::AtomKind;
 
 mod c;
+mod cpp;
 mod csharp;
+mod registry;
 
 use c::{c_atomic, c_interesting, c_leading_context, c_symbol_info};
+use cpp::{cpp_atomic, cpp_interesting, cpp_leading_context, cpp_symbol_info};
 use csharp::{csharp_atomic, csharp_interesting, csharp_leading_context, csharp_symbol_info};
 
-pub const CODE_EXTENSIONS: &[&str] = &[
-    "rs", "py", "pyi", "pyw", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "go", "java",
-    "cs", "c",
-];
-
-pub struct Language {
-    pub name: &'static str,
-    pub language: fn() -> tree_sitter::Language,
-    pub interesting: fn(Node<'_>, &str) -> Option<AtomKind>,
-    pub symbol_info: fn(Node<'_>, &str) -> Option<SymbolInfo>,
-    pub leading_context: fn(Node<'_>, &str) -> Option<Range<usize>>,
-    pub is_atomic: fn(Node<'_>) -> bool,
-}
+pub use registry::{code_extension, language_for, language_name, supports_code_path, Language};
 
 /// One symbol identity: the rendered name and the qualified breadcrumb
 /// component. Existing languages keep both equal; C++ splits them.
@@ -43,23 +35,7 @@ impl SymbolInfo {
     }
 }
 
-pub fn code_extension(path: &str) -> Option<&'static str> {
-    let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
-    CODE_EXTENSIONS
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == extension)
-}
-
-pub fn supports_code_path(path: &str) -> bool {
-    code_extension(path).is_some()
-}
-
-pub fn language_name(path: &str) -> Option<&'static str> {
-    language_for(path).map(|language| language.name)
-}
-
-fn rust_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
+pub(super) fn rust_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
     match node.kind() {
         "function_item" | "function_signature_item" => Some(AtomKind::Function),
         "struct_item" | "enum_item" | "union_item" => Some(AtomKind::Class),
@@ -77,7 +53,7 @@ fn rust_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
     }
 }
 
-fn python_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
+pub(super) fn python_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
     match node.kind() {
         "function_definition" => Some(AtomKind::Function),
         "class_definition" => Some(AtomKind::Class),
@@ -87,7 +63,7 @@ fn python_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
     }
 }
 
-fn ecmascript_interesting(node: Node<'_>, source: &str) -> Option<AtomKind> {
+pub(super) fn ecmascript_interesting(node: Node<'_>, source: &str) -> Option<AtomKind> {
     match node.kind() {
         "function_declaration"
         | "generator_function_declaration"
@@ -108,7 +84,7 @@ fn ecmascript_interesting(node: Node<'_>, source: &str) -> Option<AtomKind> {
     }
 }
 
-fn go_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
+pub(super) fn go_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
     match node.kind() {
         "function_declaration" | "method_declaration" => Some(AtomKind::Function),
         "type_spec" => {
@@ -127,7 +103,7 @@ fn go_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
     }
 }
 
-fn java_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
+pub(super) fn java_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
     match node.kind() {
         "class_declaration"
         | "interface_declaration"
@@ -191,7 +167,7 @@ fn targets_exports(left: Node<'_>, source: &str) -> bool {
     }
 }
 
-fn rust_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+pub(super) fn rust_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     if node.kind() == "impl_item" {
         let target = node
             .child_by_field_name("type")
@@ -207,7 +183,7 @@ fn rust_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     field_symbol_info(node, source)
 }
 
-fn field_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+pub(super) fn field_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     first_field_text(node, source, &["name", "type"]).map(SymbolInfo::plain)
 }
 
@@ -223,7 +199,7 @@ fn first_field_text(node: Node<'_>, source: &str, fields: &[&str]) -> Option<Str
     None
 }
 
-fn ecmascript_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+pub(super) fn ecmascript_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     if node.kind() == "assignment_expression" {
         if let Some(left) = node.child_by_field_name("left") {
             let value = source[left.byte_range()].trim();
@@ -235,7 +211,7 @@ fn ecmascript_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     field_symbol_info(node, source)
 }
 
-fn go_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+pub(super) fn go_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
         "method_declaration" => {
             let name = node.child_by_field_name("name")?;
@@ -256,7 +232,7 @@ fn go_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     }
 }
 
-fn java_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+pub(super) fn java_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
         "field_declaration" => field_names(node, source).map(SymbolInfo::plain),
         "import_declaration" => import_symbol_name(node, source).map(SymbolInfo::plain),
@@ -295,27 +271,84 @@ fn import_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
 
 /// Walk a C-family declarator to its innermost identifier.
 ///
-/// Recursion covers the declarator wrappers; qualified-component
-/// composition for `qualified_identifier` lands with the C++ adapter.
-/// A function pointer yields the variable identity so adapters can
-/// classify it as a plain declaration.
+/// Recursion covers the declarator wrappers; C++ `scope::name` composes
+/// the qualified component. A function pointer yields the variable
+/// identity so adapters can classify it as a plain declaration.
 pub(super) fn declarator_name(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
         "identifier" | "type_identifier" => {
             let name = source[node.byte_range()].trim();
             (!name.is_empty()).then(|| SymbolInfo::plain(name.to_string()))
         }
+        "qualified_identifier" => {
+            let scope = node.child_by_field_name("scope")?;
+            let name = node.child_by_field_name("name")?;
+            let display = declarator_name(name, source)
+                .map(|info| info.display_name)
+                .or_else(|| {
+                    let text = source[name.byte_range()].trim();
+                    (!text.is_empty()).then(|| text.to_string())
+                })?;
+            let scope_text = source[scope.byte_range()].trim();
+            (!scope_text.is_empty()).then(|| SymbolInfo {
+                display_name: display.clone(),
+                qualified_component: format!("{scope_text}::{display}"),
+            })
+        }
+        "operator_name" | "operator_cast" | "destructor_name" => {
+            let text = source[node.byte_range()].trim();
+            (!text.is_empty()).then(|| SymbolInfo::plain(text.to_string()))
+        }
         "function_declarator"
         | "pointer_declarator"
         | "array_declarator"
         | "parenthesized_declarator"
         | "attributed_declarator"
-        | "init_declarator" => node
+        | "init_declarator"
+        | "pointer_type_declarator"
+        | "reference_declarator" => node
             .child_by_field_name("declarator")
             .or_else(|| node.named_child(0))
             .and_then(|child| declarator_name(child, source)),
         _ => None,
     }
+}
+
+/// A declaration is a Function only when its declarator names a function
+/// directly. Function-pointer variables wrap the name in a parenthesized
+/// declarator and stay plain declarations.
+pub(super) fn declaration_kind(declarator: Node<'_>) -> AtomKind {
+    let mut current = Some(declarator);
+    while let Some(node) = current {
+        if node.kind() == "function_declarator" {
+            let is_function_pointer = matches!(
+                node.child_by_field_name("declarator").map(|n| n.kind()),
+                Some("parenthesized_declarator")
+            );
+            return if is_function_pointer {
+                AtomKind::Declaration
+            } else {
+                AtomKind::Function
+            };
+        }
+        current = node.child_by_field_name("declarator");
+    }
+    AtomKind::Declaration
+}
+
+pub(super) fn specifier_is_named_definition(node: Node<'_>) -> bool {
+    node.child_by_field_name("name").is_some() && node.child_by_field_name("body").is_some()
+}
+
+pub(super) fn in_function_body(node: Node<'_>) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        if current.kind() == "function_definition" {
+            return true;
+        }
+        ancestor = current.parent();
+    }
+    false
 }
 
 fn sibling_context(node: Node<'_>, source: &str, kinds: &[&str]) -> Option<Range<usize>> {
@@ -339,14 +372,14 @@ fn sibling_context(node: Node<'_>, source: &str, kinds: &[&str]) -> Option<Range
     }
 }
 
-fn rust_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
+pub(super) fn rust_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
     let range = sibling_context(node, source, &["line_comment", "block_comment"])?;
     let text = source.get(range.clone())?;
     let last_line = text.lines().next_back().unwrap_or_default().trim_start();
     (last_line.starts_with("///") || last_line.starts_with("//!")).then_some(range)
 }
 
-fn python_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
+pub(super) fn python_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
     if let Some(parent) = node.parent() {
         if parent.kind() == "decorated_definition" {
             let mut start = node.start_byte();
@@ -365,121 +398,43 @@ fn python_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> 
     sibling_context(node, source, &["comment"])
 }
 
-fn ecmascript_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
+pub(super) fn ecmascript_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
     sibling_context(node, source, &["comment"])
 }
 
-fn go_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
+pub(super) fn go_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
     sibling_context(node, source, &["comment"])
 }
 
-fn java_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
+pub(super) fn java_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {
     sibling_context(node, source, &["line_comment", "block_comment"])
 }
 
-fn rust_atomic(node: Node<'_>) -> bool {
+pub(super) fn rust_atomic(node: Node<'_>) -> bool {
     matches!(
         node.kind(),
         "string_literal" | "raw_string_literal" | "macro_definition"
     )
 }
 
-fn python_atomic(node: Node<'_>) -> bool {
+pub(super) fn python_atomic(node: Node<'_>) -> bool {
     matches!(node.kind(), "string" | "concatenated_string")
 }
 
-fn ecmascript_atomic(node: Node<'_>) -> bool {
+pub(super) fn ecmascript_atomic(node: Node<'_>) -> bool {
     matches!(
         node.kind(),
         "string" | "template_string" | "regex" | "jsx_element" | "jsx_fragment"
     )
 }
 
-fn go_atomic(node: Node<'_>) -> bool {
+pub(super) fn go_atomic(node: Node<'_>) -> bool {
     matches!(
         node.kind(),
         "interpreted_string_literal" | "raw_string_literal" | "rune_literal"
     )
 }
 
-fn java_atomic(node: Node<'_>) -> bool {
+pub(super) fn java_atomic(node: Node<'_>) -> bool {
     matches!(node.kind(), "string_literal" | "character_literal")
-}
-
-pub fn language_for(locator: &str) -> Option<Language> {
-    match code_extension(locator)? {
-        "rs" => Some(Language {
-            name: "rust",
-            language: || tree_sitter_rust::LANGUAGE.into(),
-            interesting: rust_interesting,
-            symbol_info: rust_symbol_info,
-            leading_context: rust_leading_context,
-            is_atomic: rust_atomic,
-        }),
-        "py" | "pyi" | "pyw" => Some(Language {
-            name: "python",
-            language: || tree_sitter_python::LANGUAGE.into(),
-            interesting: python_interesting,
-            symbol_info: field_symbol_info,
-            leading_context: python_leading_context,
-            is_atomic: python_atomic,
-        }),
-        "ts" | "mts" | "cts" => Some(Language {
-            name: "typescript",
-            language: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            interesting: ecmascript_interesting,
-            symbol_info: ecmascript_symbol_info,
-            leading_context: ecmascript_leading_context,
-            is_atomic: ecmascript_atomic,
-        }),
-        "tsx" => Some(Language {
-            name: "typescript",
-            language: || tree_sitter_typescript::LANGUAGE_TSX.into(),
-            interesting: ecmascript_interesting,
-            symbol_info: ecmascript_symbol_info,
-            leading_context: ecmascript_leading_context,
-            is_atomic: ecmascript_atomic,
-        }),
-        "js" | "jsx" | "mjs" | "cjs" => Some(Language {
-            name: "javascript",
-            language: || tree_sitter_javascript::LANGUAGE.into(),
-            interesting: ecmascript_interesting,
-            symbol_info: ecmascript_symbol_info,
-            leading_context: ecmascript_leading_context,
-            is_atomic: ecmascript_atomic,
-        }),
-        "go" => Some(Language {
-            name: "go",
-            language: || tree_sitter_go::LANGUAGE.into(),
-            interesting: go_interesting,
-            symbol_info: go_symbol_info,
-            leading_context: go_leading_context,
-            is_atomic: go_atomic,
-        }),
-        "java" => Some(Language {
-            name: "java",
-            language: || tree_sitter_java::LANGUAGE.into(),
-            interesting: java_interesting,
-            symbol_info: java_symbol_info,
-            leading_context: java_leading_context,
-            is_atomic: java_atomic,
-        }),
-        "cs" => Some(Language {
-            name: "csharp",
-            language: || tree_sitter_c_sharp::LANGUAGE.into(),
-            interesting: csharp_interesting,
-            symbol_info: csharp_symbol_info,
-            leading_context: csharp_leading_context,
-            is_atomic: csharp_atomic,
-        }),
-        "c" => Some(Language {
-            name: "c",
-            language: || tree_sitter_c::LANGUAGE.into(),
-            interesting: c_interesting,
-            symbol_info: c_symbol_info,
-            leading_context: c_leading_context,
-            is_atomic: c_atomic,
-        }),
-        _ => None,
-    }
 }

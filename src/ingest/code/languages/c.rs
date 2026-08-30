@@ -4,7 +4,10 @@ use std::ops::Range;
 
 use tree_sitter::Node;
 
-use super::{declarator_name, sibling_context, SymbolInfo};
+use super::{
+    declaration_kind, declarator_name, in_function_body, sibling_context,
+    specifier_is_named_definition, SymbolInfo,
+};
 use crate::core::AtomKind;
 
 pub(super) fn c_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind> {
@@ -69,41 +72,4 @@ pub(super) fn c_atomic(node: Node<'_>) -> bool {
         node.kind(),
         "string_literal" | "char_literal" | "preproc_arg"
     )
-}
-
-/// A declaration is a Function only when its declarator names a function
-/// directly. Function-pointer variables wrap the name in a parenthesized
-/// declarator and stay plain declarations.
-fn declaration_kind(declarator: Node<'_>) -> AtomKind {
-    let mut current = Some(declarator);
-    while let Some(node) = current {
-        if node.kind() == "function_declarator" {
-            let is_function_pointer = matches!(
-                node.child_by_field_name("declarator").map(|n| n.kind()),
-                Some("parenthesized_declarator")
-            );
-            return if is_function_pointer {
-                AtomKind::Declaration
-            } else {
-                AtomKind::Function
-            };
-        }
-        current = node.child_by_field_name("declarator");
-    }
-    AtomKind::Declaration
-}
-
-fn specifier_is_named_definition(node: Node<'_>) -> bool {
-    node.child_by_field_name("name").is_some() && node.child_by_field_name("body").is_some()
-}
-
-fn in_function_body(node: Node<'_>) -> bool {
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        if current.kind() == "function_definition" {
-            return true;
-        }
-        ancestor = current.parent();
-    }
-    false
 }
