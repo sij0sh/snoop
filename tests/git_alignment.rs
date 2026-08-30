@@ -28,11 +28,15 @@ const AUTH_V2: &str =
 const AUTH_V3: &str =
     "pub fn refresh_session() {\n    verify_session();\n}\n\nfn verify_session() {\n    true\n}\n";
 
+const STORE_V1: &str = "void Store::flush() {\n    sync();\n}\n";
+const STORE_V2: &str = "void Store::flush() {\n    verify();\n}\n";
+
 fn alignment_repo(root: &Path) {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/auth.rs"), AUTH_V1).unwrap();
     std::fs::write(root.join("src/tool.py"), "def load():\n    return 1\n").unwrap();
     std::fs::write(root.join("notes.txt"), "note one\n").unwrap();
+    std::fs::write(root.join("src/store.cpp"), STORE_V1).unwrap();
     git(root, &["init", "--quiet"]);
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "seed"]);
@@ -44,6 +48,10 @@ fn alignment_repo(root: &Path) {
     .unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "grow load"]);
+
+    std::fs::write(root.join("src/store.cpp"), STORE_V2).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "--quiet", "-m", "rework flush body"]);
 
     std::fs::write(root.join("src/auth.rs"), AUTH_V2).unwrap();
     git(root, &["add", "."]);
@@ -125,6 +133,24 @@ fn python_edits_align_to_python_symbols() {
     assert_eq!(python.change_kind, "modified");
     assert_eq!(python.symbol_id.as_deref(), Some("src/tool.py > load"));
     assert!(python.evidence.contains("total = 1"));
+}
+
+#[test]
+fn cpp_edits_align_to_qualified_methods() {
+    let directory = tempfile::tempdir().unwrap();
+    alignment_repo(directory.path());
+    let changes = indexed_changes(&directory);
+    let cpp = changes
+        .iter()
+        .find(|change| change.path == "src/store.cpp" && change.symbol_id.is_some())
+        .expect("symbol-aligned unit for the cpp edit");
+    assert_eq!(cpp.language.as_deref(), Some("cpp"));
+    assert_eq!(cpp.change_kind, "modified");
+    assert_eq!(
+        cpp.symbol_id.as_deref(),
+        Some("src/store.cpp > Store::flush")
+    );
+    assert!(cpp.evidence.contains("verify()"));
 }
 
 #[test]

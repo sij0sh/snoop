@@ -53,6 +53,11 @@ fn code_symbols_are_retrievable_across_languages() {
         "#include \"geom.h\"\n\nvoid scale_vector(int factor)\n{\n    apply(factor);\n}\n",
     )
     .unwrap();
+    std::fs::write(
+        directory.path().join("src/room.cpp"),
+        "namespace snoop {\n\nclass Room {\n  public:\n    void admit(int guest);\n};\n\nvoid Room::admit(int guest) { count_ += guest; }\n\n}  // namespace snoop\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(sessions_root.path().join("empty")).unwrap();
     std::env::set_var("SNOOP_SESSIONS_ROOT", sessions_root.path());
 
@@ -69,6 +74,7 @@ fn code_symbols_are_retrievable_across_languages() {
         ("load_session", "src/Auth.java"),
         ("drain_queue", "src/Worker.cs"),
         ("scale_vector", "src/geom.c"),
+        ("admit", "src/room.cpp"),
     ] {
         let report = query(
             &store,
