@@ -5,6 +5,7 @@ use super::{
     ParsedAtom, UnitKind, MAX_TOKENS, MERGE_BELOW,
 };
 use crate::core::BuiltAnchor;
+use crate::metadata::source_slices::SourceSlice;
 
 fn section_key(atoms: &[ParsedAtom], index: usize) -> usize {
     let mut current = index;
@@ -98,12 +99,15 @@ pub(super) fn build_prose(atoms: &[ParsedAtom], locator: &str) -> Vec<BuiltUnit>
                         routing,
                         anchors.clone(),
                     );
-                    unit.metadata["source_slices"] = serde_json::json!([{
-                        "atom_hash": atoms[index].content_hash,
-                        "start_offset": atoms[index].start_offset + *start,
-                        "end_offset": atoms[index].start_offset + *end,
-                        "boundary": "prose",
-                    }]);
+                    crate::metadata::source_slices::set(
+                        &mut unit.metadata,
+                        vec![SourceSlice {
+                            atom_hash: atoms[index].content_hash.clone(),
+                            start_offset: atoms[index].start_offset + *start,
+                            end_offset: atoms[index].start_offset + *end,
+                            boundary: Some("prose".to_string()),
+                        }],
+                    );
                     drafts.push(DraftUnit {
                         unit,
                         indices: vec![index],
@@ -156,18 +160,17 @@ pub(super) fn build_prose(atoms: &[ParsedAtom], locator: &str) -> Vec<BuiltUnit>
                     &previous.unit.evidence_text,
                     &previous.unit.routing_text,
                 );
-                let source_slices: Vec<serde_json::Value> = previous
+                let source_slices: Vec<SourceSlice> = previous
                     .indices
                     .iter()
-                    .map(|index| {
-                        serde_json::json!({
-                            "atom_hash": atoms[*index].content_hash,
-                            "start_offset": atoms[*index].start_offset,
-                            "end_offset": atoms[*index].end_offset,
-                        })
+                    .map(|index| SourceSlice {
+                        atom_hash: atoms[*index].content_hash.clone(),
+                        start_offset: atoms[*index].start_offset,
+                        end_offset: atoms[*index].end_offset,
+                        boundary: None,
                     })
                     .collect();
-                previous.unit.metadata["source_slices"] = serde_json::json!(source_slices);
+                crate::metadata::source_slices::set(&mut previous.unit.metadata, source_slices);
                 for anchor in draft.unit.anchors {
                     merge_anchor(&mut previous.unit.anchors, anchor);
                 }

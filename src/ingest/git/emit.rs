@@ -167,11 +167,14 @@ pub fn ingest_commit(
             &commit.message,
         ),
         breadcrumb: commit_breadcrumb.clone(),
-        metadata: serde_json::json!({
-            "commit": commit.oid,
-            "timestamp": commit.timestamp,
-            "subject": subject,
-        }),
+        metadata: {
+            let mut metadata = serde_json::json!({
+                "commit": commit.oid,
+                "subject": subject,
+            });
+            crate::metadata::timestamp::set(&mut metadata, Some(commit.timestamp));
+            metadata
+        },
     }];
     let mut units = Vec::new();
     let mut ordinal = 1u32;
@@ -305,9 +308,9 @@ pub fn ingest_commit(
 
         let mut base_metadata = serde_json::json!({
             "commit": commit.oid,
-            "timestamp": commit.timestamp,
             "path": file.path,
         });
+        crate::metadata::timestamp::set(&mut base_metadata, Some(commit.timestamp));
         if let Some(old) = &file.old_path {
             base_metadata["old_path"] = serde_json::json!(old);
         }
@@ -320,7 +323,7 @@ pub fn ingest_commit(
                     {
                         let mut metadata = base_metadata.clone();
                         metadata["strategy"] = serde_json::json!(alignment.strategy);
-                        metadata["symbol"] = serde_json::json!(span.name);
+                        crate::metadata::code_symbol::set_symbol(&mut metadata, &span.name);
                         metadata["symbol_id"] = serde_json::json!(span.breadcrumb);
                         metadata["declaration_kind"] = serde_json::json!(span.kind.as_str());
                         metadata

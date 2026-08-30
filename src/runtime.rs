@@ -434,10 +434,7 @@ pub fn query(
         }
         item_diagnostics.push(ItemDiagnostics {
             unit_id: UnitId(*unit_id),
-            source_slices: unit.metadata["source_slices"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
+            source_slices: crate::metadata::source_slices::read(&unit.metadata),
             anchors: store.anchors_for_unit(*unit_id)?,
             selected_because: reasons,
         });

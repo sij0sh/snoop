@@ -2,6 +2,7 @@ use super::{
     code_anchors, code_routing, content_atom, file_anchor, make_unit, prepend_leading_context,
     whole_atom_evidence, BuiltUnit, ParsedAtom, UnitKind,
 };
+use crate::metadata::source_slices::SourceSlice;
 
 const IMPORT_NODE_KINDS: &[&str] = &[
     "use_declaration",
@@ -16,7 +17,7 @@ const IMPORT_NODE_KINDS: &[&str] = &[
 fn is_import_atom(atom: &ParsedAtom) -> bool {
     // Adapters own import detection; fall back to node kinds for atoms
     // produced before the callback existed.
-    if let Some(flag) = atom.metadata["is_import"].as_bool() {
+    if let Some(flag) = crate::metadata::is_import::read(&atom.metadata) {
         return flag;
     }
     atom.metadata["node_kind"]
@@ -32,10 +33,9 @@ fn comment_is_attached(atoms: &[ParsedAtom], index: usize) -> bool {
             content_atom(candidate) && candidate.kind != crate::core::AtomKind::Comment
         })
         .is_some_and(|next| {
-            next.metadata["leading_context"]["start_offset"].as_u64()
-                == Some(atom.start_offset as u64)
-                && next.metadata["leading_context"]["end_offset"].as_u64()
-                    == Some(atom.end_offset as u64)
+            crate::metadata::leading_context::read(&next.metadata).is_some_and(|context| {
+                context.start_offset == atom.start_offset && context.end_offset == atom.end_offset
+            })
         })
 }
 
@@ -90,10 +90,10 @@ fn shell_evidence(atoms: &[ParsedAtom], index: usize, children: &[usize]) -> Str
     }
     for (position, child) in children.iter().enumerate() {
         let child_atom = &atoms[*child];
-        let signature = child_atom.metadata["signature"]
-            .as_str()
+        let signature = crate::metadata::code_symbol::read(&child_atom.metadata)
+            .map(|record| record.signature)
             .unwrap_or_default();
-        let line = signature.split('{').next().unwrap_or(signature).trim();
+        let line = signature.split('{').next().unwrap_or(&signature).trim();
         if line.is_empty() {
             let name = child_atom
                 .breadcrumb
@@ -173,19 +173,12 @@ pub(super) fn build_code(atoms: &[ParsedAtom], locator: &str) -> Vec<BuiltUnit> 
             continue;
         }
         let routing = code_routing(locator, atom);
-        let segments = atom.metadata["chunk_segments"].as_array();
-        if let Some(segments) = segments.filter(|segments| !segments.is_empty()) {
+        let segments = crate::metadata::chunk_segments::read(&atom.metadata);
+        if !segments.is_empty() {
             let anchors = code_anchors(locator, atom);
             for segment in segments {
-                let Some(start) = segment["start_offset"].as_u64().map(|value| value as usize)
-                else {
-                    continue;
-                };
-                let Some(end) = segment["end_offset"].as_u64().map(|value| value as usize) else {
-                    continue;
-                };
-                let relative_start = start.saturating_sub(atom.start_offset);
-                let relative_end = end.saturating_sub(atom.start_offset);
+                let relative_start = segment.start_offset.saturating_sub(atom.start_offset);
+                let relative_end = segment.end_offset.saturating_sub(atom.start_offset);
                 let Some(text) = atom.text.get(relative_start..relative_end) else {
                     continue;
                 };
@@ -198,12 +191,15 @@ pub(super) fn build_code(atoms: &[ParsedAtom], locator: &str) -> Vec<BuiltUnit> 
                     routing.clone(),
                     anchors.clone(),
                 );
-                unit.metadata["source_slices"] = serde_json::json!([{
-                    "atom_hash": atom.content_hash,
-                    "start_offset": segment["start_offset"],
-                    "end_offset": segment["end_offset"],
-                    "boundary": segment["boundary"],
-                }]);
+                crate::metadata::source_slices::set(
+                    &mut unit.metadata,
+                    vec![SourceSlice {
+                        atom_hash: atom.content_hash.clone(),
+                        start_offset: segment.start_offset,
+                        end_offset: segment.end_offset,
+                        boundary: Some(segment.boundary),
+                    }],
+                );
                 units.push(unit);
             }
         } else {

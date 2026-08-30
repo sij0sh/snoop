@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use crate::core::{
     hash_segments, AnchorKind, AtomKind, BuiltAnchor, BuiltUnit, ParsedAtom, SourceKind, UnitKind,
 };
+use crate::metadata::source_slices::SourceSlice;
 
 mod code;
 mod prose;
@@ -54,16 +55,12 @@ fn content_atom_at(atoms: &[ParsedAtom], index: usize) -> bool {
     true
 }
 
-pub(super) fn leading_context_text(atom: &ParsedAtom) -> Option<&str> {
-    atom.metadata["leading_context"]["text"]
-        .as_str()
-        .filter(|text| !text.trim().is_empty())
-}
-
 pub(super) fn prepend_leading_context(evidence: &mut String, atom: &ParsedAtom) {
-    if let Some(context) = leading_context_text(atom) {
-        evidence.push_str(context.trim_end());
-        evidence.push_str("\n\n");
+    if let Some(context) = crate::metadata::leading_context::read(&atom.metadata) {
+        if !context.text.trim().is_empty() {
+            evidence.push_str(context.text.trim_end());
+            evidence.push_str("\n\n");
+        }
     }
 }
 
@@ -143,13 +140,13 @@ fn file_anchor(locator: &str, relationship: &str) -> BuiltAnchor {
 
 fn code_anchors(locator: &str, atom: &ParsedAtom) -> Vec<BuiltAnchor> {
     let mut anchors = vec![file_anchor(locator, "defined_in")];
-    if let Some(symbol) = atom.metadata["symbol"]
-        .as_str()
-        .filter(|value| !value.is_empty())
+    if let Some(symbol) = crate::metadata::code_symbol::read(&atom.metadata)
+        .map(|record| record.display_name)
+        .filter(|symbol| !symbol.is_empty())
     {
         anchors.push(BuiltAnchor {
             kind: AnchorKind::Symbol,
-            value: symbol.to_string(),
+            value: symbol,
             relationship: "defines".to_string(),
         });
     }
@@ -186,17 +183,11 @@ fn prose_routing(locator: &str, breadcrumb: &str, evidence: &str) -> String {
 
 fn code_routing(locator: &str, atom: &ParsedAtom) -> String {
     let symbol = &atom.breadcrumb;
-    let signature = atom.metadata["signature"].as_str().unwrap_or_default();
-    let references = atom.metadata["references"]
-        .as_array()
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str())
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
+    let record = crate::metadata::code_symbol::read(&atom.metadata);
+    let (signature, references) = match record {
+        Some(record) => (record.signature, record.references.join(" ")),
+        None => (String::new(), String::new()),
+    };
     format!(
         "source: code\npath: {locator}\nsymbol: {symbol}\nkind: {}\nsignature: {signature}\nreferences: {references}",
         atom.kind.as_str()
@@ -215,25 +206,24 @@ fn make_unit(
         .iter()
         .map(|index| atoms[*index].content_hash.as_str())
         .collect();
-    let source_slices: Vec<serde_json::Value> = atom_indices
+    let source_slices: Vec<SourceSlice> = atom_indices
         .iter()
-        .map(|index| {
-            serde_json::json!({
-                "atom_hash": atoms[*index].content_hash,
-                "start_offset": atoms[*index].start_offset,
-                "end_offset": atoms[*index].end_offset,
-            })
+        .map(|index| SourceSlice {
+            atom_hash: atoms[*index].content_hash.clone(),
+            start_offset: atoms[*index].start_offset,
+            end_offset: atoms[*index].end_offset,
+            boundary: None,
         })
         .collect();
+    let mut metadata = serde_json::json!({});
+    crate::metadata::source_slices::set(&mut metadata, source_slices);
     BuiltUnit {
         kind,
         token_count: estimate_tokens(&evidence),
         content_hash: unit_hash(kind, &hashes, &evidence, &routing),
         evidence_text: evidence,
         routing_text: routing,
-        metadata: serde_json::json!({
-            "source_slices": source_slices,
-        }),
+        metadata,
         anchors,
     }
 }

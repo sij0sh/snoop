@@ -142,7 +142,7 @@ impl Store {
             .optional()?
             .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
             .unwrap_or_else(|| serde_json::json!({}));
-        metadata["git_tip"] = serde_json::json!(tip);
+        crate::metadata::git_tip::set(&mut metadata, tip);
         self.conn.execute(
             "UPDATE repository SET metadata=?1",
             params![metadata.to_string()],
@@ -289,7 +289,7 @@ impl Store {
                         unit.routing_text,
                         unit.token_count,
                         unit.metadata.to_string(),
-                        unit.metadata["timestamp"].as_i64()
+                        crate::metadata::timestamp::read(&unit.metadata)
                     ],
                 )?;
 
@@ -321,7 +321,7 @@ impl Store {
                         unit.token_count,
                         unit.content_hash,
                         unit.metadata.to_string(),
-                        unit.metadata["timestamp"].as_i64()
+                        crate::metadata::timestamp::read(&unit.metadata)
                     ],
                     |row| row.get(0),
                 )?;

@@ -4,6 +4,7 @@ use std::ops::{Range, RangeInclusive};
 use tree_sitter::{Node, Parser};
 
 use crate::core::{AtomKind, ParsedAtom};
+use crate::metadata::chunk_segments::ChunkSegment;
 
 mod languages;
 #[cfg(test)]
@@ -122,6 +123,28 @@ impl<'a> EmitContext<'a> {
                 )
             };
             let leading_context = (self.language.leading_context)(node, source);
+            let is_import = !root_overview && (self.language.is_import)(node, source);
+            let mut metadata = serde_json::json!({
+                "file": self.locator,
+                "chunk_alternatives": crate::metadata::chunk_segments::value(&alternative_segments),
+                "node_kind": node.kind(),
+            });
+            crate::metadata::code_symbol::write(
+                &mut metadata,
+                &info.display_name,
+                &signature(node, source),
+                &references,
+            );
+            crate::metadata::chunk_segments::set(&mut metadata, segments);
+            crate::metadata::is_import::set(&mut metadata, is_import);
+            crate::metadata::leading_context::set(
+                &mut metadata,
+                leading_context.map(|range| crate::metadata::leading_context::LeadingContext {
+                    start_offset: range.start,
+                    end_offset: range.end,
+                    text: source.get(range).unwrap_or_default().to_string(),
+                }),
+            );
             let index = self.atoms.len();
             self.atoms.push(ParsedAtom {
                 kind,
@@ -132,21 +155,7 @@ impl<'a> EmitContext<'a> {
                 content_hash: ParsedAtom::content_hash_of(kind, &breadcrumb, &text),
                 text,
                 breadcrumb: breadcrumb.clone(),
-                metadata: serde_json::json!({
-                    "file": self.locator,
-                    "symbol": info.display_name,
-                    "signature": signature(node, source),
-                    "references": references,
-                    "chunk_segments": segments,
-                    "chunk_alternatives": alternative_segments,
-                    "node_kind": node.kind(),
-                    "is_import": !root_overview && (self.language.is_import)(node, source),
-                    "leading_context": leading_context.map(|range| serde_json::json!({
-                        "start_offset": range.start,
-                        "end_offset": range.end,
-                        "text": source.get(range).unwrap_or_default(),
-                    })),
-                }),
+                metadata,
             });
             self.ordinal += 1;
             self.enclosing.push(index);
@@ -190,7 +199,7 @@ fn legal_segments(
     source: &str,
     max_chars: usize,
     is_atomic: fn(Node<'_>) -> bool,
-) -> Vec<serde_json::Value> {
+) -> Vec<ChunkSegment> {
     fn collect_ends(node: Node<'_>, is_atomic: fn(Node<'_>) -> bool, ends: &mut Vec<usize>) {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
@@ -233,30 +242,35 @@ fn legal_segments(
             continue;
         }
         if last_legal > start {
-            segments.push(serde_json::json!({
-                "start_offset": start,
-                "end_offset": last_legal,
-                "boundary": "ast",
-            }));
+            segments.push(ChunkSegment {
+                start_offset: start,
+                end_offset: last_legal,
+                boundary: "ast".to_string(),
+            });
             start = last_legal;
         }
         while source[start..boundary].chars().count() > max_chars {
             let end = byte_after_chars(source, start, boundary, max_chars);
-            segments.push(serde_json::json!({
-                "start_offset": start,
-                "end_offset": end,
-                "boundary": "lexical_fallback",
-            }));
+            segments.push(ChunkSegment {
+                start_offset: start,
+                end_offset: end,
+                boundary: "lexical_fallback".to_string(),
+            });
             start = end;
         }
         last_legal = boundary;
     }
     if start < node.end_byte() {
-        segments.push(serde_json::json!({
-            "start_offset": start,
-            "end_offset": node.end_byte(),
-            "boundary": if last_legal == node.end_byte() { "ast" } else { "lexical_fallback" },
-        }));
+        segments.push(ChunkSegment {
+            start_offset: start,
+            end_offset: node.end_byte(),
+            boundary: if last_legal == node.end_byte() {
+                "ast"
+            } else {
+                "lexical_fallback"
+            }
+            .to_string(),
+        });
     }
     segments
 }
@@ -317,23 +331,22 @@ fn boundaries_from_atoms(path: &str, source: &str, atoms: &[ParsedAtom]) -> Vec<
                 .and_then(|parent| atoms.get(parent))
                 .filter(|parent| parent.kind != AtomKind::File)
                 .map(|parent| parent.breadcrumb.clone());
-            let leading_context = atom.metadata["leading_context"]["start_offset"]
-                .as_u64()
-                .zip(atom.metadata["leading_context"]["end_offset"].as_u64())
-                .map(|(start, end)| start as usize..end as usize);
+            let leading_context = crate::metadata::leading_context::read(&atom.metadata)
+                .map(|context| context.start_offset..context.end_offset);
+            let record = crate::metadata::code_symbol::read(&atom.metadata);
             CodeBoundary {
                 language: language.clone(),
                 kind: atom.kind,
                 symbol_id: atom.breadcrumb.clone(),
-                display_name: atom.metadata["symbol"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
+                display_name: record
+                    .as_ref()
+                    .map(|record| record.display_name.clone())
+                    .unwrap_or_default(),
                 qualified_name,
-                signature: atom.metadata["signature"]
-                    .as_str()
-                    .filter(|value| !value.is_empty())
-                    .map(String::from),
+                signature: record
+                    .as_ref()
+                    .map(|record| record.signature.clone())
+                    .filter(|signature| !signature.is_empty()),
                 parent_symbol_id,
                 byte_range: atom.start_offset..atom.end_offset,
                 line_range: line_of(source, atom.start_offset)
@@ -342,25 +355,11 @@ fn boundaries_from_atoms(path: &str, source: &str, atoms: &[ParsedAtom]) -> Vec<
                         atom.end_offset.saturating_sub(1).max(atom.start_offset),
                     ),
                 leading_context,
-                references: atom.metadata["references"]
-                    .as_array()
-                    .map(|values| {
-                        values
-                            .iter()
-                            .filter_map(|value| value.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                safe_split_points: atom.metadata["chunk_segments"]
-                    .as_array()
-                    .map(|segments| {
-                        segments
-                            .iter()
-                            .filter_map(|segment| segment["end_offset"].as_u64())
-                            .map(|value| value as usize)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                references: record.map(|record| record.references).unwrap_or_default(),
+                safe_split_points: crate::metadata::chunk_segments::read(&atom.metadata)
+                    .iter()
+                    .map(|segment| segment.end_offset)
+                    .collect(),
             }
         })
         .collect()

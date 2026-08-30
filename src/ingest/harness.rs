@@ -149,9 +149,7 @@ fn build_turn_units(turns: &[EpisodeTurn], session_id: &str) -> Vec<BuiltUnit> {
                 "commands": commands,
                 "outcomes": outcomes,
             });
-            if let Some(timestamp) = turn.timestamp {
-                metadata["timestamp"] = serde_json::json!(timestamp);
-            }
+            crate::metadata::timestamp::set(&mut metadata, turn.timestamp);
             let (start_byte, end_byte) = turn.byte_range();
             metadata["source_range"] = serde_json::json!({
                 "start_byte": start_byte,
