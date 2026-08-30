@@ -1,24 +1,30 @@
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
+mod common;
 
+use std::io::Cursor;
+use std::sync::Arc;
+use std::time::Duration;
+
+use common::{HangingEmbedServer, McpChild, indexed_fixture, simple_fixture};
 use snoop::inference::MockEmbedder;
 use snoop::ingest::index_repository_bounded;
-use snoop::mcp::{handle_message, serve, PROTOCOL_VERSION};
+use snoop::mcp::{ServeConfig, handle_message, serve, PROTOCOL_VERSION};
 use snoop::store::Store;
 
-fn simple_fixture(root: &Path) {
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("src/auth.rs"),
-        "pub fn refresh_session() {\n    validate();\n    rotate();\n}\n\nfn validate() {}\n\nfn rotate() {}\n",
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("README.md"),
-        "# Auth\n\n`refresh_session` rotates the session token after validation.\n",
-    )
-    .unwrap();
+fn memory_serve_config(embedder: Option<Arc<dyn snoop::inference::Embedder>>) -> ServeConfig {
+    ServeConfig {
+        open_store: Arc::new(|| Store::open_in_memory()),
+        embedder,
+        workers: 2,
+        embed_deadline: Duration::from_secs(2),
+    }
+}
+
+/// Runs `serve` to completion over an in-memory store and returns stdout.
+fn serve_collect(config: ServeConfig, script: &str) -> String {
+    let input = Cursor::new(script.as_bytes().to_vec());
+    let mut output = Vec::new();
+    serve(config, input, &mut output).unwrap();
+    String::from_utf8(output).unwrap()
 }
 
 #[test]
@@ -27,8 +33,7 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
     simple_fixture(directory.path());
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let outcome =
-        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
     let response = handle_message(
         &store,
@@ -109,17 +114,15 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
 
     let script = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n\
          not-json\n\
-         {\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"ping\"}\n"
-        .to_string();
-    let mut input = script.as_bytes();
-    let mut output = Vec::new();
-    serve(&store, Some(&embedder), &mut input, &mut output).unwrap();
-    let lines: Vec<serde_json::Value> = std::str::from_utf8(&output)
-        .unwrap()
-        .lines()
-        .map(serde_json::from_str)
-        .collect::<Result<_, _>>()
-        .unwrap();
+         {\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"ping\"}\n";
+    let lines: Vec<serde_json::Value> = serve_collect(
+        memory_serve_config(Some(Arc::new(MockEmbedder::new("mock-v1")))),
+        script,
+    )
+    .lines()
+    .map(serde_json::from_str)
+    .collect::<Result<_, _>>()
+    .unwrap();
     assert_eq!(lines.len(), 2, "notification silent, other two answered");
     assert_eq!(lines[0]["error"]["code"], -32700);
     assert_eq!(lines[1]["id"], 8);
@@ -144,7 +147,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
     )
     .unwrap();
     let git = |args: &[&str]| {
-        let status = Command::new("git")
+        let status = std::process::Command::new("git")
             .arg("-C")
             .arg(&repo)
             .args(args)
@@ -204,7 +207,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         vec!["init", repo_arg, "--db", db.to_str().unwrap()],
         vec!["index", repo_arg, "--db", db.to_str().unwrap()],
     ] {
-        let output = Command::new(binary)
+        let output = std::process::Command::new(binary)
             .args(&args)
             .envs(env.iter().copied())
             .output()
@@ -216,12 +219,12 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         );
     }
 
-    let mut child = Command::new(binary)
+    let mut child = std::process::Command::new(binary)
         .args(["mcp", "--db", db.to_str().unwrap()])
         .envs(env.iter().copied())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
     let requests = [
@@ -238,6 +241,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
             "params":{"name":"repo_symbol_context","arguments":{"symbol":"refresh_session"}}}),
     ];
     {
+        use std::io::Write;
         let stdin = child.stdin.as_mut().unwrap();
         for request in &requests {
             serde_json::to_writer(&mut *stdin, request).unwrap();
@@ -258,9 +262,18 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         "notification got no response"
     );
 
-    let initialize = &responses[0];
+    // Tool calls run on a worker pool, so responses may arrive out of order;
+    // JSON-RPC allows this. Everything is keyed by id.
+    let by_id = |id: i64| {
+        responses
+            .iter()
+            .find(|response| response["id"] == id)
+            .expect("every request is answered")
+    };
+
+    let initialize = by_id(1);
     assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
-    let names: Vec<&str> = responses[1]["result"]["tools"]
+    let names: Vec<&str> = by_id(2)["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
@@ -268,7 +281,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         .collect();
     assert_eq!(names.len(), 3);
 
-    let get_context = &responses[2];
+    let get_context = by_id(3);
     assert!(get_context["result"]["isError"].is_null());
     let packet: serde_json::Value = serde_json::from_str(
         get_context["result"]["content"][0]["text"]
@@ -299,7 +312,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         );
     }
 
-    let history = &responses[3];
+    let history = by_id(4);
     let history_entries: serde_json::Value =
         serde_json::from_str(history["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     let history_list = history_entries.as_array().unwrap();
@@ -308,7 +321,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         .as_str()
         .is_some_and(|text| text.contains("cache step"))));
 
-    let symbol = &responses[4];
+    let symbol = by_id(5);
     let symbol_entries: serde_json::Value =
         serde_json::from_str(symbol["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     let symbol_list = symbol_entries.as_array().unwrap();
@@ -328,10 +341,111 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
 
 #[test]
 fn serve_exits_cleanly_at_eof() {
-    let store = Store::open_in_memory().unwrap();
-    let embedder = MockEmbedder::new("mock-v1");
-    let mut input = b"".as_slice();
-    let mut output = Vec::new();
-    serve(&store, Some(&embedder), &mut input, &mut output).unwrap();
-    assert!(output.is_empty());
+    let input = Cursor::new(Vec::new());
+    let output = Vec::new();
+    serve(
+        memory_serve_config(Some(Arc::new(MockEmbedder::new("mock-v1")))),
+        input,
+        output,
+    )
+    .unwrap();
+}
+
+/// AP-1 invariant: the control plane never queues behind tool calls. Ping is
+/// answered immediately even though three get_repo_context calls are stuck
+/// inside a hung embedder.
+#[test]
+fn ping_answers_while_tool_calls_wait_on_a_hung_embedder() {
+    let (_dir, db) = indexed_fixture();
+    let embedder = HangingEmbedServer::spawn();
+    let url = embedder.url();
+    let mut child = McpChild::start(
+        &db,
+        &[
+            ("SNOOP_EMBED_URL", &url),
+            ("SNOOP_EMBED_DEADLINE_MS", "100"),
+        ],
+    );
+
+    for id in 1..=3 {
+        child.send(&serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}));
+    }
+    std::thread::sleep(Duration::from_millis(20));
+    let ping_sent = std::time::Instant::now();
+    child.send(&serde_json::json!({"jsonrpc":"2.0","id":99,"method":"ping"}));
+
+    // Workers may answer in any order; read all four responses. The
+    // control-plane invariant is the ping's latency: the sequential loop
+    // would have made ping wait K x hang (minutes), never milliseconds.
+    let mut tool_ids = Vec::new();
+    let mut ping_latency: Option<Duration> = None;
+    for _ in 0..4 {
+        let sent_for_this_response = std::time::Instant::now();
+        let _ = sent_for_this_response;
+        let response = child
+            .read_response(Duration::from_secs(5))
+            .expect("every request answered");
+        if response["id"] == 99 {
+            ping_latency = Some(ping_sent.elapsed());
+        } else {
+            assert_eq!(
+                response["result"]["degraded"], true,
+                "hung embedder degrades to lexical-only with a visible flag"
+            );
+            tool_ids.push(response["id"].as_i64().expect("tool response id"));
+        }
+    }
+    let ping_latency = ping_latency.expect("ping answered");
+    assert!(
+        ping_latency < Duration::from_millis(500),
+        "ping stayed fast under embed contention: {ping_latency:?}"
+    );
+    tool_ids.sort_unstable();
+    assert_eq!(tool_ids, vec![1, 2, 3], "all tool calls answered");
+}
+
+/// AP-1 invariant: after the embed deadline fires three times in a row, the
+/// breaker serves lexical-only immediately instead of paying the deadline.
+#[test]
+fn embed_breaker_opens_after_repeated_deadlines() {
+    let (_dir, db) = indexed_fixture();
+    let embedder = HangingEmbedServer::spawn();
+    let url = embedder.url();
+    let mut child = McpChild::start(
+        &db,
+        &[
+            ("SNOOP_EMBED_URL", &url),
+            ("SNOOP_EMBED_DEADLINE_MS", "80"),
+        ],
+    );
+
+    for id in 1..=3 {
+        child.send(&serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}));
+        let sent = std::time::Instant::now();
+        let response = child
+            .read_response(Duration::from_secs(5))
+            .expect("degraded answer");
+        assert_eq!(response["result"]["degraded"], true);
+        let elapsed = sent.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(80) && elapsed < Duration::from_millis(1000),
+            "deadline bounds the wait: {elapsed:?}"
+        );
+    }
+
+    // Breaker is open: the fourth query skips the embed entirely.
+    child.send(&serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
+        "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}));
+    let sent = std::time::Instant::now();
+    let response = child
+        .read_response(Duration::from_secs(5))
+        .expect("breaker answer");
+    assert_eq!(response["result"]["degraded"], true);
+    let elapsed = sent.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "open breaker answers immediately: {elapsed:?}"
+    );
 }

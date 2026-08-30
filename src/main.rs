@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
@@ -122,6 +123,38 @@ fn print_ensure_error(message: String) -> ! {
         .unwrap_or_else(|_| "{\"status\": \"error\"}".to_string())
     );
     std::process::exit(1)
+}
+
+/// `Stdin` adapter implementing `BufRead` that is `Send`: the std `StdinLock`
+/// guard is not `Send`, but the serve loop reads lines on its reader thread.
+struct SendBufStdin {
+    stdin: std::io::Stdin,
+    buffer: Vec<u8>,
+    position: usize,
+}
+
+impl std::io::Read for SendBufStdin {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let available = self.fill_buf()?;
+        let take = available.len().min(buf.len());
+        buf[..take].copy_from_slice(&available[..take]);
+        self.consume(take);
+        Ok(take)
+    }
+}
+impl std::io::BufRead for SendBufStdin {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.position >= self.buffer.len() {
+            self.buffer.clear();
+            self.position = 0;
+            self.stdin.lock().read_until(b'\n', &mut self.buffer)?;
+        }
+        Ok(&self.buffer[self.position..])
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.position = (self.position + amount).min(self.buffer.len());
+    }
 }
 
 fn retrieval_mode(embedder: Option<&dyn Embedder>) -> (&'static str, Option<String>) {
@@ -358,16 +391,37 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("{}", serde_json::to_string_pretty(&episodes)?);
         }
         Command::Mcp { db } => {
-            let store = open_store(&db_path(db))?;
+            let db_path = db_path(db);
+            let store = open_store(&db_path)?;
             bound_repository(&store)?;
-            let embedder = embedder();
-            let stdin = std::io::stdin();
-            let stdout = std::io::stdout();
+            // deadline. workers=1 with a huge deadline restores old behavior.
+            let embedder: Option<std::sync::Arc<dyn Embedder>> =
+                embedder().map(std::sync::Arc::from);
+            let workers = std::env::var("SNOOP_MCP_WORKERS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(4)
+                .max(1);
+            let embed_deadline = std::time::Duration::from_millis(
+                std::env::var("SNOOP_EMBED_DEADLINE_MS")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(2000)
+                    .max(1),
+            );
             snoop::mcp::serve(
-                &store,
-                embedder.as_deref(),
-                &mut stdin.lock(),
-                &mut stdout.lock(),
+                snoop::mcp::ServeConfig {
+                    open_store: std::sync::Arc::new(move || snoop::store::Store::open(&db_path)),
+                    embedder,
+                    workers,
+                    embed_deadline,
+                },
+                SendBufStdin {
+                    stdin: std::io::stdin(),
+                    buffer: Vec::new(),
+                    position: 0,
+                },
+                std::io::stdout().lock(),
             )?;
         }
     }
