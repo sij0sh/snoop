@@ -1,4 +1,5 @@
 use super::*;
+mod c;
 mod c_declarator;
 mod csharp;
 
@@ -301,7 +302,7 @@ fn tsx_files_parse_with_jsx_extension() {
 fn code_extensions_cover_the_shared_registry() {
     for locator in [
         "a.rs", "a.py", "a.pyi", "a.pyw", "a.ts", "a.tsx", "a.mts", "a.cts", "a.js", "a.jsx",
-        "a.mjs", "a.cjs", "a.go", "a.java", "a.cs",
+        "a.mjs", "a.cjs", "a.go", "a.java", "a.cs", "a.c",
     ] {
         assert!(supports_code_path(locator), "{locator} must be supported");
     }

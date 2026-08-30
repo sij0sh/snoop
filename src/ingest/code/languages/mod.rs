@@ -6,13 +6,15 @@ use tree_sitter::Node;
 
 use crate::core::AtomKind;
 
+mod c;
 mod csharp;
 
+use c::{c_atomic, c_interesting, c_leading_context, c_symbol_info};
 use csharp::{csharp_atomic, csharp_interesting, csharp_leading_context, csharp_symbol_info};
 
 pub const CODE_EXTENSIONS: &[&str] = &[
     "rs", "py", "pyi", "pyw", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "go", "java",
-    "cs",
+    "cs", "c",
 ];
 
 pub struct Language {
@@ -297,8 +299,6 @@ fn import_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
 /// composition for `qualified_identifier` lands with the C++ adapter.
 /// A function pointer yields the variable identity so adapters can
 /// classify it as a plain declaration.
-// Consumed by the C and C++ adapters in later plan phases.
-#[allow(dead_code)]
 pub(super) fn declarator_name(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
         "identifier" | "type_identifier" => {
@@ -471,6 +471,14 @@ pub fn language_for(locator: &str) -> Option<Language> {
             symbol_info: csharp_symbol_info,
             leading_context: csharp_leading_context,
             is_atomic: csharp_atomic,
+        }),
+        "c" => Some(Language {
+            name: "c",
+            language: || tree_sitter_c::LANGUAGE.into(),
+            interesting: c_interesting,
+            symbol_info: c_symbol_info,
+            leading_context: c_leading_context,
+            is_atomic: c_atomic,
         }),
         _ => None,
     }
