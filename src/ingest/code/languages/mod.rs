@@ -6,8 +6,13 @@ use tree_sitter::Node;
 
 use crate::core::AtomKind;
 
+mod csharp;
+
+use csharp::{csharp_atomic, csharp_interesting, csharp_leading_context, csharp_symbol_info};
+
 pub const CODE_EXTENSIONS: &[&str] = &[
     "rs", "py", "pyi", "pyw", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "go", "java",
+    "cs",
 ];
 
 pub struct Language {
@@ -458,6 +463,14 @@ pub fn language_for(locator: &str) -> Option<Language> {
             symbol_info: java_symbol_info,
             leading_context: java_leading_context,
             is_atomic: java_atomic,
+        }),
+        "cs" => Some(Language {
+            name: "csharp",
+            language: || tree_sitter_c_sharp::LANGUAGE.into(),
+            interesting: csharp_interesting,
+            symbol_info: csharp_symbol_info,
+            leading_context: csharp_leading_context,
+            is_atomic: csharp_atomic,
         }),
         _ => None,
     }

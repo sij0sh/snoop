@@ -43,6 +43,11 @@ fn code_symbols_are_retrievable_across_languages() {
         "class Auth {\n  void load_session() {\n    verify();\n  }\n}\n",
     )
     .unwrap();
+    std::fs::write(
+        directory.path().join("src/Worker.cs"),
+        "namespace App\n{\n    public class Worker\n    {\n        public void drain_queue()\n        {\n            flush();\n        }\n    }\n}\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(sessions_root.path().join("empty")).unwrap();
     std::env::set_var("SNOOP_SESSIONS_ROOT", sessions_root.path());
 
@@ -57,6 +62,7 @@ fn code_symbols_are_retrievable_across_languages() {
         ("rotate_session", "src/auth.js"),
         ("Save_item", "src/store.go"),
         ("load_session", "src/Auth.java"),
+        ("drain_queue", "src/Worker.cs"),
     ] {
         let report = query(
             &store,
