@@ -203,3 +203,49 @@ fn directory_name_matches_pi_convention() {
 fn locator_keeps_the_pi_session_prefix() {
     assert_eq!(session_locator("abc"), "pi-session:abc");
 }
+
+#[test]
+fn parallel_bash_results_attach_without_rescan() {
+    // Audit finding 5 (run 20260830195149-6f1a96a5): every result attaches
+    // O(1) through the call-event index (was Theta(R x E_turn): exactly
+    // m^2 scan steps in this parallel-call shape).
+    // Budget (advisory, machine-dependent): parallel wall <= 1.2x sequential
+    // at m = 4096 (10.1x before).
+    let m = 64;
+    let mut lines = vec![
+        r#"{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#.to_string(),
+    ];
+    let calls: Vec<String> = (0..m)
+        .map(|i| {
+            format!(
+                r#"{{"type":"toolCall","id":"c{i}","name":"bash","arguments":{{"command":"cmd {i}"}}}}"#
+            )
+        })
+        .collect();
+    lines.push(format!(
+        r#"{{"type":"message","id":"a0","message":{{"role":"assistant","content":[{}]}}}}"#,
+        calls.join(",")
+    ));
+    for i in 0..m {
+        lines.push(format!(
+            r#"{{"type":"message","id":"r{i}","message":{{"role":"toolResult","content":[{{"type":"toolResult","toolCallId":"c{i}","toolName":"bash","text":"{{\"exitCode\":7}}"}}]}}}}"#
+        ));
+    }
+    let turns = parse_pi_episodes(&lines.join("\n"));
+    assert_eq!(turns.len(), 1, "one user-anchored turn");
+    let calls: Vec<_> = turns[0]
+        .events
+        .iter()
+        .filter(|event| event.kind == jsonl::EventKind::ToolCall)
+        .collect();
+    assert_eq!(calls.len(), m);
+    for call in &calls {
+        let outcome = call
+            .outcome
+            .as_ref()
+            .unwrap_or_else(|| panic!("result for {} must attach without a scan", call.id));
+        let debug = format!("{outcome:?}");
+        assert!(debug.contains("failed") && debug.contains("Some(7)"),
+            "outcome must upgrade from the structured result: {debug}");
+    }
+}

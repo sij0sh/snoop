@@ -448,3 +448,40 @@ fn oversized_splitting_avoids_atomic_interiors() {
         }
     }
 }
+
+#[test]
+fn line_cursor_scans_each_prefix_byte_at_most_twice() {
+    // Audit finding 2 (run 20260830195149-6f1a96a5): scanned bytes per
+    // analyze_code <= 2 x S_f on flat symbol layout; doubling file size with
+    // symbol count co-growing grows scans < 2.5x (was ~4x, Theta(A' x S_f)).
+    // Budget (advisory, machine-dependent): analyze_code wall <= 10 ms at
+    // S_f = 100 KB (51 ms scan term before).
+    use std::sync::atomic::Ordering;
+    let build = |g: usize| {
+        let mut source = String::new();
+        for i in 0..g {
+            source.push_str(&format!("fn flat_{i}() {{\n    let _ = {i};\n    let _ = {i};\n}}\n\n"));
+        }
+        source
+    };
+    let mut previous_scan = 0u64;
+    for g in [64usize, 128, 256] {
+        let source = build(g);
+        let before = super::LINE_SCAN_BYTES.load(Ordering::Relaxed);
+        let boundaries = super::analyze_code("src/x.rs", &source).unwrap();
+        let scanned = super::LINE_SCAN_BYTES.load(Ordering::Relaxed) - before;
+        assert!(
+            scanned as usize <= 2 * source.len(),
+            "scanned {scanned} bytes > 2 x S_f {} at G={g}",
+            source.len()
+        );
+        if previous_scan > 0 {
+            assert!(
+                (scanned as f64) < 2.5 * previous_scan as f64,
+                "doubling file size grew scans {previous_scan} -> {scanned} (bound 2.5x)"
+            );
+        }
+        previous_scan = scanned;
+        assert_eq!(boundaries.len(), g, "one boundary per flat function");
+    }
+}

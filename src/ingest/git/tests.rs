@@ -323,3 +323,145 @@ fn push_units_respects_header_budget() {
     );
     assert!(units.iter().all(|unit| unit.token_count <= MAX_TOKENS));
 }
+
+#[test]
+fn rename_index_collapses_pairwise_body_work() {
+    // Audit finding 1 (run 20260830195149-6f1a96a5): doubling G must grow
+    // the rename matcher's length gates + body compares < 2.2x and span-body
+    // bytes < 3x (closed forms were G^2 / G^3 / G^2 x S_f before repair).
+    // Budget (advisory, machine-dependent): reconcile wall <= 20 ms at
+    // G=512 dense-packed (12.27 s before).
+    use std::sync::atomic::Ordering;
+    let run = |g: usize| {
+        let mut before = String::new();
+        let mut after = String::new();
+        for i in 0..g {
+            before.push_str(&format!("fn sym_{i}() {{\n    step_{i}_a();\n    step_{i}_b();\n}}\n\n"));
+            after.push_str(&format!("fn renamed_{i}() {{\n    step_{i}_a();\n    step_{i}_b();\n}}\n\n"));
+        }
+        let old_count = before.lines().count() as u32;
+        let new_count = after.lines().count() as u32;
+        let mut text = format!("@@ -1,{old_count} +1,{new_count} @@\n");
+        // Only the `fn` name lines change; bodies stay as context. Changing
+        // every line would trip the whole-file fallback (covers_file) on the
+        // new side and collapse all groups into one.
+        for (old_line, new_line) in before.lines().zip(after.lines()) {
+            if old_line.starts_with("fn ") {
+                text.push_str("-");
+                text.push_str(old_line);
+                text.push('\n');
+                text.push_str("+");
+                text.push_str(new_line);
+                text.push('\n');
+            } else {
+                text.push_str(" ");
+                text.push_str(old_line);
+                text.push('\n');
+            }
+        }
+        let hunks = vec![Hunk {
+            old_start: 1,
+            old_count,
+            new_start: 1,
+            new_count,
+            text,
+            start_offset: 0,
+            end_offset: 0,
+        }];
+        let len_before = super::align::RENAME_LEN_CHECKS.load(Ordering::Relaxed);
+        let body_before = super::align::RENAME_BODY_COMPARES.load(Ordering::Relaxed);
+        let bytes_before = super::align::SPAN_BODY_BYTES.load(Ordering::Relaxed);
+        let alignments = reconcile_alignments(
+            &hunks,
+            &before,
+            &after,
+            "src/x.rs",
+            "src/x.rs",
+            false,
+            ChangeKind::Modified,
+        );
+        let renamed = alignments
+            .iter()
+            .filter(|alignment| alignment.change_kind == ChangeKind::Renamed)
+            .count();
+        assert_eq!(renamed, g, "every renamed symbol must be classified");
+        assert_eq!(renamed, g, "every renamed symbol must be classified");
+        (
+            super::align::RENAME_LEN_CHECKS.load(Ordering::Relaxed) - len_before,
+            super::align::RENAME_BODY_COMPARES.load(Ordering::Relaxed) - body_before,
+            super::align::SPAN_BODY_BYTES.load(Ordering::Relaxed) - bytes_before,
+        )
+    };
+    let (small_len, small_body, small_bytes) = run(24);
+    let (large_len, large_body, large_bytes) = run(48);
+    let small_ops = small_len + small_body;
+    let large_ops = large_len + large_body;
+    assert!(
+        (large_ops as f64) < 2.2 * small_ops as f64,
+        "len checks + body compares grew {small_ops} -> {large_ops} (bound 2.2x)"
+    );
+    assert!(
+        (large_bytes as f64) < 3.0 * small_bytes as f64,
+        "span-body bytes grew {small_bytes} -> {large_bytes} (bound 3x)"
+    );
+}
+
+#[test]
+fn spawn_count_is_flat_in_files_per_commit() {
+    // Audit finding 3 (run 20260830195149-6f1a96a5): spawns per commit stay
+    // constant in F (was exactly 4F + 1). Invariant: spawns/run <= 4C + k0.
+    // Budget (advisory): 128-file commit spawn wall <= 50 ms (790 ms before).
+    use std::sync::atomic::Ordering;
+    let run = |files: usize| -> u64 {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "guard@test"]);
+        git(&["config", "user.name", "guard"]);
+        for i in 0..files {
+            std::fs::write(
+                dir.path().join(format!("m{i}.rs")),
+                format!("fn f{i}() {{\n    let _ = {i};\n}}\n"),
+            )
+            .unwrap();
+        }
+        git(&["add", "."]);
+        git(&["commit", "-qm", "batch"]);
+        let head = String::from_utf8(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let commit = super::history::CommitRef {
+            oid: head.trim().to_string(),
+            timestamp: 0,
+            message: "batch".to_string(),
+            content_hash: "guard".to_string(),
+        };
+        let before = super::history::GIT_SPAWNS.load(Ordering::Relaxed);
+        let units = super::emit::ingest_commit(dir.path(), &commit).unwrap();
+        assert!(!units.is_empty(), "a {files}-file commit must build units");
+        super::history::GIT_SPAWNS.load(Ordering::Relaxed) - before
+    };
+    let small = run(4);
+    let large = run(32);
+    assert_eq!(small, large, "spawn count must not grow with files per commit");
+    assert!(large <= 8, "expected <= 8 spawns for one commit, got {large}");
+}
