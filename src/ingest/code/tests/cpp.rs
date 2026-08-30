@@ -36,7 +36,7 @@ fn cpp_nested_namespaces_nest_breadcrumbs() {
 
 #[test]
 fn cpp_out_of_class_definitions_share_one_identity() {
-    let source = "class Session {\n  public:\n    void refresh();\n    void refresh();\n};\n\nvoid Session::refresh() { ready_ = true; }\n";
+    let source = "class Session {\n  public:\n    void tick();\n};\n\nvoid Session::refresh();\n\nvoid Session::refresh() { ready_ = true; }\n";
     let boundaries = analyze_code("src/session.cpp", source).unwrap();
     let refreshes: Vec<_> = boundaries
         .iter()
@@ -50,6 +50,14 @@ fn cpp_out_of_class_definitions_share_one_identity() {
         "both boundaries use the qualified identity: {refreshes:?}"
     );
     assert_ne!(refreshes[0].byte_range, refreshes[1].byte_range);
+    let tick = boundaries
+        .iter()
+        .find(|boundary| boundary.display_name == "tick")
+        .unwrap();
+    assert!(
+        tick.qualified_name.ends_with("Session > tick"),
+        "in-class nests under the class"
+    );
 }
 
 #[test]

@@ -276,7 +276,7 @@ fn import_symbol_name(node: Node<'_>, source: &str) -> Option<String> {
 /// identity so adapters can classify it as a plain declaration.
 pub(super) fn declarator_name(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
-        "identifier" | "type_identifier" => {
+        "identifier" | "type_identifier" | "field_identifier" => {
             let name = source[node.byte_range()].trim();
             (!name.is_empty()).then(|| SymbolInfo::plain(name.to_string()))
         }
@@ -295,9 +295,14 @@ pub(super) fn declarator_name(node: Node<'_>, source: &str) -> Option<SymbolInfo
                 qualified_component: format!("{scope_text}::{display}"),
             })
         }
-        "operator_name" | "operator_cast" | "destructor_name" => {
+        "operator_name" | "destructor_name" => {
             let text = source[node.byte_range()].trim();
             (!text.is_empty()).then(|| SymbolInfo::plain(text.to_string()))
+        }
+        "operator_cast" => {
+            let type_node = node.named_child(0)?;
+            let text = source[type_node.byte_range()].trim();
+            (!text.is_empty()).then(|| SymbolInfo::plain(format!("operator {text}")))
         }
         "function_declarator"
         | "pointer_declarator"
@@ -330,6 +335,11 @@ pub(super) fn declaration_kind(declarator: Node<'_>) -> AtomKind {
             } else {
                 AtomKind::Function
             };
+        }
+        if node.kind() == "operator_cast" {
+            // A conversion operator declares a function through its own
+            // name; its declarator only carries the parameter list.
+            return AtomKind::Function;
         }
         current = node.child_by_field_name("declarator");
     }

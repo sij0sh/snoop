@@ -19,9 +19,10 @@ pub(super) fn cpp_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind>
             specifier_is_named_definition(node).then_some(AtomKind::Class)?
         }
         "function_definition" => AtomKind::Function,
-        "declaration" => {
+        "declaration" | "field_declaration" => {
             // Constructors, destructors, and operators arrive as plain
-            // declarations whose declarator names a function.
+            // declarations whose declarator names a function; class member
+            // declarations are field_declaration nodes.
             let declarator = node.child_by_field_name("declarator")?;
             Some(declaration_kind(declarator))?
         }
@@ -48,7 +49,7 @@ pub(super) fn cpp_interesting(node: Node<'_>, _source: &str) -> Option<AtomKind>
 
 pub(super) fn cpp_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
     match node.kind() {
-        "function_definition" | "type_definition" | "declaration" => {
+        "function_definition" | "type_definition" | "declaration" | "field_declaration" => {
             declarator_name(node.child_by_field_name("declarator")?, source)
         }
         "namespace_definition"

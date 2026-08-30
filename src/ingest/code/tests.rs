@@ -1,6 +1,7 @@
 use super::*;
 mod c;
 mod c_declarator;
+mod cpp;
 mod csharp;
 
 #[test]
