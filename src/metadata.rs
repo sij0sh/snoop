@@ -74,12 +74,7 @@ pub(crate) mod code_symbol {
         pub references: Vec<String>,
     }
 
-    pub fn write(
-        metadata: &mut Value,
-        display_name: &str,
-        signature: &str,
-        references: &[String],
-    ) {
+    pub fn write(metadata: &mut Value, display_name: &str, signature: &str, references: &[String]) {
         metadata["symbol"] = serde_json::json!(display_name);
         metadata["signature"] = serde_json::json!(signature);
         metadata["references"] = serde_json::json!(references);
@@ -276,12 +271,15 @@ mod tests {
             })
         );
 
-        // Git span shape: symbol only; the other fields degrade to empty.
+        // Git span shape: symbol only; signature/references degrade to empty.
         let mut metadata = serde_json::json!({});
         code_symbol::set_symbol(&mut metadata, "refresh");
         assert_eq!(
             code_symbol::read(&metadata),
-            Some(code_symbol::CodeSymbol::default())
+            Some(code_symbol::CodeSymbol {
+                display_name: "refresh".into(),
+                ..code_symbol::CodeSymbol::default()
+            })
         );
         assert_eq!(code_symbol::read(&serde_json::json!({})), None);
     }
@@ -358,16 +356,19 @@ mod tests {
             source_slices::read(&metadata),
             metadata["source_slices"].as_array().unwrap().clone()
         );
-        assert_eq!(source_slices::read(&serde_json::json!({})), Vec::new());
+        assert_eq!(
+            source_slices::read(&serde_json::json!({})),
+            Vec::<serde_json::Value>::new()
+        );
     }
 
     #[test]
     fn timestamp_sets_only_when_present() {
         let mut metadata = serde_json::json!({});
-        timestamp::set(&mut metadata, Some(1_700_000_000));
-        assert_eq!(timestamp::read(&metadata), Some(1_700_000_000));
         timestamp::set(&mut metadata, None);
         assert!(metadata.get("timestamp").is_none());
+        timestamp::set(&mut metadata, Some(1_700_000_000));
+        assert_eq!(timestamp::read(&metadata), Some(1_700_000_000));
         assert_eq!(timestamp::read(&serde_json::json!({})), None);
     }
 }
