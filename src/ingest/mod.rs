@@ -13,7 +13,7 @@ use crate::core::{Repository, SourceKind};
 use crate::inference::Embedder;
 use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 
-pub const INDEX_FORMAT_VERSION: &str = "phase-12-v1";
+pub const INDEX_FORMAT_VERSION: &str = "phase-13-v1";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed request, so the TTL only

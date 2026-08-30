@@ -31,12 +31,21 @@ const AUTH_V3: &str =
 const STORE_V1: &str = "void Store::flush() {\n    sync();\n}\n";
 const STORE_V2: &str = "void Store::flush() {\n    verify();\n}\n";
 
+const WORKER_V1: &str = "namespace Acme;\n\npublic class Worker\n{\n    public void drain_queue()\n    {\n        poll();\n    }\n}\n";
+const WORKER_V2: &str =
+    "namespace Acme;\n\npublic class Worker\n{\n    public void drain_queue()\n    {\n        verify();\n    }\n}\n";
+
+const GEOM_V1: &str = "double scale_vector(double v, double s) {\n    return v * s;\n}\n";
+const GEOM_V2: &str = "double scale_vector(double v, double s) {\n    return v * s * 2.0;\n}\n";
+
 fn alignment_repo(root: &Path) {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/auth.rs"), AUTH_V1).unwrap();
     std::fs::write(root.join("src/tool.py"), "def load():\n    return 1\n").unwrap();
     std::fs::write(root.join("notes.txt"), "note one\n").unwrap();
     std::fs::write(root.join("src/store.cpp"), STORE_V1).unwrap();
+    std::fs::write(root.join("src/worker.cs"), WORKER_V1).unwrap();
+    std::fs::write(root.join("src/geom.c"), GEOM_V1).unwrap();
     git(root, &["init", "--quiet"]);
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "seed"]);
@@ -52,6 +61,20 @@ fn alignment_repo(root: &Path) {
     std::fs::write(root.join("src/store.cpp"), STORE_V2).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "rework flush body"]);
+
+    std::fs::write(root.join("src/worker.cs"), WORKER_V2).unwrap();
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "--quiet", "-m", "rework drain_queue body"],
+    );
+
+    std::fs::write(root.join("src/geom.c"), GEOM_V2).unwrap();
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "--quiet", "-m", "rework scale_vector body"],
+    );
 
     std::fs::write(root.join("src/auth.rs"), AUTH_V2).unwrap();
     git(root, &["add", "."]);
@@ -151,6 +174,39 @@ fn cpp_edits_align_to_qualified_methods() {
         Some("src/store.cpp > Store::flush")
     );
     assert!(cpp.evidence.contains("verify()"));
+}
+
+#[test]
+fn csharp_edits_align_to_qualified_methods() {
+    let directory = tempfile::tempdir().unwrap();
+    alignment_repo(directory.path());
+    let changes = indexed_changes(&directory);
+    let csharp = changes
+        .iter()
+        .find(|change| change.path == "src/worker.cs" && change.symbol_id.is_some())
+        .expect("symbol-aligned unit for the csharp edit");
+    assert_eq!(csharp.language.as_deref(), Some("csharp"));
+    assert_eq!(csharp.change_kind, "modified");
+    assert_eq!(
+        csharp.symbol_id.as_deref(),
+        Some("src/worker.cs > Acme > Worker > drain_queue")
+    );
+    assert!(csharp.evidence.contains("verify();"));
+}
+
+#[test]
+fn c_edits_align_to_functions() {
+    let directory = tempfile::tempdir().unwrap();
+    alignment_repo(directory.path());
+    let changes = indexed_changes(&directory);
+    let c = changes
+        .iter()
+        .find(|change| change.path == "src/geom.c" && change.symbol_id.is_some())
+        .expect("symbol-aligned unit for the c edit");
+    assert_eq!(c.language.as_deref(), Some("c"));
+    assert_eq!(c.change_kind, "modified");
+    assert_eq!(c.symbol_id.as_deref(), Some("src/geom.c > scale_vector"));
+    assert!(c.evidence.contains("* 2.0"));
 }
 
 #[test]
