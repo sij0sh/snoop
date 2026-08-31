@@ -151,6 +151,10 @@ cp extensions/snoop-pi.ts ~/.pi/agent/extensions/
 Set `SNOOP_ENSURE=0` to disable the trigger. Spawn failures are appended to
 `.snoop-ensure.log` in the project directory.
 
+The extension also registers two Pi tools backed by the CLI, mirroring the MCP
+tools below for sessions without the MCP server: `get_repo_context` runs
+`snoop query`, and `repo_symbol_context` runs `snoop inspect symbol`.
+
 ## MCP server
 
 Run the stdio MCP server over an existing index:
