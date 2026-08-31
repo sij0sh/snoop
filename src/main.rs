@@ -11,7 +11,7 @@ use snoop::store::Store;
 const DEFAULT_ENSURE_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Parser)]
-#[command(name = "snoop", about = "Local repository context compiler")]
+#[command(name = "snoop", version, about = "Local repository context compiler")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
