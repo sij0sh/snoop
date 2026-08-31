@@ -8,7 +8,10 @@
 //! Within the TTL an ensure reports `locked` (pinned by
 //! `cli_ensure_reports_locked_under_a_held_lease` in tests/cli.rs), so the
 //! single-active-indexer guarantee is TTL-qualified; production closes that
-//! gap by renewing the lease before every embed batch (ingest::index_embeddings).
+//! gap by renewing the lease before every embed batch and before every
+//! in-batch retry (ingest::index_embeddings, backfill::embed_batch_bounded).
+//! The `embed_lease_choreography` tests below pin the renew-and-abort
+//! contract at the library level.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -238,7 +241,8 @@ fn ensure_steals_a_live_holders_expired_lease() {
     assert!(store.acquire_lease("holder", 1).unwrap());
     // The holder process stays alive, but its lease lapses: past the TTL even
     // a live holder loses the lease (within the TTL it would be `locked`, as
-    // pinned in tests/cli.rs). Production closes this with per-batch renewal.
+    // pinned in tests/cli.rs). Production closes this with per-batch and
+    // per-retry lease renewal plus abort-on-loss.
     std::thread::sleep(EXPIRY_SLEEP);
 
     let (status, report) = run_ensure(binary, &repo, &db);
@@ -258,4 +262,234 @@ fn ensure_steals_a_live_holders_expired_lease() {
     let (status, report) = run_ensure(binary, &repo, &db);
     assert!(status.success(), "{report}");
     assert_eq!(report["status"], "up-to-date", "database stayed consistent");
+}
+
+// ---------------------------------------------------------------------------
+// Embed-lease choreography (defect-audit 20260831023057-8ecdc8ca c2).
+//
+// These pin the library-level contract behind the CLI steal tests above:
+// the embed retry loop renews the index lease before every attempt and must
+// abort with a clean "lease lost" failure instead of writing vectors under
+// a lapsed or stolen lease. Lease expiry is forced with direct SQL so the
+// choreography has no wall-clock races.
+
+mod embed_lease_choreography {
+    use std::collections::VecDeque;
+    use std::path::Path;
+    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use rusqlite::Connection;
+    use snoop::core::{hash_segments, AnchorKind, BuiltAnchor, BuiltUnit, SourceKind, UnitKind};
+    use snoop::inference::{EmbedError, EmbedResult, Embedder};
+    use snoop::ingest::index_embeddings;
+    use snoop::store::{SourceIngest, Store};
+
+    /// One scripted embed attempt.
+    enum Step {
+        /// Immediate transient failure.
+        Transient,
+        /// Transient failure, delayed until the gate receives a value.
+        StallThenTransient(Receiver<()>),
+        /// Success, delayed until the gate receives a value.
+        StallThenSucceed(Receiver<()>),
+    }
+
+    struct ScriptedEmbedder {
+        script: Mutex<VecDeque<Step>>,
+        events: Sender<&'static str>,
+    }
+
+    impl ScriptedEmbedder {
+        fn new(steps: Vec<Step>) -> (Self, Receiver<&'static str>) {
+            let (events, receiver) = channel();
+            (
+                Self {
+                    script: Mutex::new(steps.into()),
+                    events,
+                },
+                receiver,
+            )
+        }
+
+        fn gate() -> (Sender<()>, Receiver<()>) {
+            channel()
+        }
+    }
+
+    impl Embedder for ScriptedEmbedder {
+        fn model_version(&self) -> &str {
+            "scripted-v1"
+        }
+
+        fn embed_query(&self, _text: &str) -> EmbedResult<Vec<f32>> {
+            Ok(vec![0.0; 2])
+        }
+
+        fn embed_documents(&self, texts: &[String]) -> EmbedResult<Vec<Vec<f32>>> {
+            self.embed_documents_bounded(texts, Duration::from_secs(1))
+        }
+
+        fn embed_documents_bounded(
+            &self,
+            texts: &[String],
+            _timeout: Duration,
+        ) -> EmbedResult<Vec<Vec<f32>>> {
+            self.events.send("embed").unwrap();
+            match self.script.lock().unwrap().pop_front() {
+                Some(Step::Transient) => {
+                    Err(EmbedError::Transient("scripted transient".into()).into())
+                }
+                Some(Step::StallThenTransient(gate)) => {
+                    gate.recv().unwrap();
+                    Err(EmbedError::Transient("scripted transient".into()).into())
+                }
+                Some(Step::StallThenSucceed(gate)) => {
+                    gate.recv().unwrap();
+                    Ok(texts.iter().map(|_| vec![0.0_f32; 2]).collect())
+                }
+                None => panic!("scripted embedder ran out of steps"),
+            }
+        }
+    }
+
+    /// File-backed store with one committed unit still missing vectors.
+    fn committed_store(db: &Path) -> Store {
+        let mut store = Store::open(db).unwrap();
+        store.bind_repository("/repo").unwrap();
+        let unit = BuiltUnit {
+            kind: UnitKind::Prose,
+            evidence_text: "unit body".to_string(),
+            routing_text: "unit body".to_string(),
+            token_count: 3,
+            content_hash: hash_segments(&["unit body"]),
+            metadata: serde_json::json!({}),
+            anchors: vec![BuiltAnchor {
+                kind: AnchorKind::File,
+                value: "/repo/note.md".to_string(),
+                relationship: "touched".to_string(),
+            }],
+        };
+        store
+            .commit_source(SourceIngest {
+                kind: SourceKind::Markdown,
+                locator: "/repo/note.md",
+                content_hash: "source-hash",
+                modified_at: None,
+                metadata: serde_json::json!({}),
+                units: &[unit],
+            })
+            .unwrap();
+        store
+    }
+
+    /// Force the lease to lapse now: the holder stopped renewing, exactly as
+    /// if its TTL had elapsed mid-embed.
+    fn expire_lease(db: &Path) {
+        Connection::open(db)
+            .unwrap()
+            .execute(
+                "UPDATE index_leases SET expires_at = expires_at - 999999",
+                [],
+            )
+            .unwrap();
+    }
+
+    fn pending_vectors(db: &Path) -> usize {
+        Store::open(db)
+            .unwrap()
+            .units_missing_vectors_page("evidence", "scripted-v1", 0, 32)
+            .unwrap()
+            .len()
+    }
+
+    fn wait_event(receiver: &Receiver<&'static str>) {
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(10)).unwrap(),
+            "embed"
+        );
+    }
+
+    #[test]
+    fn lapsed_lease_aborts_the_retry_before_vectors_are_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = directory.path().join("index.db");
+        let mut store = committed_store(&db);
+        assert!(store.acquire_lease("run1", 3600).unwrap());
+
+        // Attempt 1 stalls mid-embed (slow HTTP); while it is stalled the
+        // lease lapses and nobody steals it.
+        let (release, gate) = ScriptedEmbedder::gate();
+        let (embedder, events) = ScriptedEmbedder::new(vec![Step::StallThenTransient(gate)]);
+        let worker = {
+            let db = db.to_path_buf();
+            std::thread::spawn(move || {
+                let store = Store::open(&db).unwrap();
+                index_embeddings(&store, &embedder, None, "run1")
+            })
+        };
+        wait_event(&events); // attempt 1 is now in flight
+        expire_lease(&db);
+        release.send(()).unwrap(); // attempt 1 fails transiently
+
+        // Without the in-batch renewal the retry would run under a dead
+        // lease and write vectors; with it, the renewal reports the lapse
+        // and the run aborts cleanly before any write.
+        let result = worker.join().unwrap();
+        let error = result.err().expect("run must abort on the lapsed lease");
+        assert!(error.to_string().contains("index lease lost"), "{error}");
+        assert_eq!(
+            pending_vectors(&db),
+            1,
+            "no vectors may be written after the lease lapsed"
+        );
+        drop(store);
+    }
+
+    #[test]
+    fn stolen_lease_mid_embed_steals_from_a_stalled_holder() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = directory.path().join("index.db");
+        let mut store = committed_store(&db);
+        assert!(store.acquire_lease("run1", 3600).unwrap());
+
+        // Attempt 1 stalls mid-embed; the lease lapses and a contender
+        // steals it (steal-on-stall must keep working mid-batch).
+        let (release, gate) = ScriptedEmbedder::gate();
+        let (embedder, events) = ScriptedEmbedder::new(vec![Step::StallThenTransient(gate)]);
+        let worker = {
+            let db = db.to_path_buf();
+            std::thread::spawn(move || {
+                let store = Store::open(&db).unwrap();
+                index_embeddings(&store, &embedder, None, "run1")
+            })
+        };
+        wait_event(&events); // attempt 1 is now in flight
+        expire_lease(&db);
+        let contender = Store::open(&db).unwrap();
+        assert!(
+            contender.acquire_lease("stealer", 3600).unwrap(),
+            "a stalled holder's lapsed lease must be stealable"
+        );
+        release.send(()).unwrap();
+
+        // run1's pre-retry renewal now fails: the lease belongs to stealer.
+        let result = worker.join().unwrap();
+        let error = result
+            .err()
+            .expect("stolen lease must abort the old holder");
+        assert!(error.to_string().contains("index lease lost"), "{error}");
+        assert_eq!(
+            pending_vectors(&db),
+            1,
+            "run1 must not write vectors under stealer's lease"
+        );
+        let owner: String = Connection::open(&db)
+            .unwrap()
+            .query_row("SELECT owner FROM index_leases", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(owner, "stealer", "the stealer's lease must stand");
+        drop(store);
+    }
 }
