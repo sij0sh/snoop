@@ -24,26 +24,49 @@ C++, Ruby, PHP, and shell code. Repository scanning respects Git ignore rules.
 
 ## Prerequisites
 
-- A Rust toolchain with Cargo.
-- Git when indexing Git history.
-- An optional llama.cpp embedding server for hybrid retrieval.
+Nothing for the CLI itself. Git is needed only when indexing Git history. Snoop
+installs the optional embedder itself (see "Optional embeddings").
 
 ## Install
 
-From the repository root:
+### 1. Install the CLI
+
+No Rust toolchain required — one command grabs the right build for your OS:
 
 ```bash
-cargo install --path .
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/colbymchenry/snoop/main/scripts/install.sh | sh
 ```
 
-For development, run `cargo build` and `cargo test`.
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/colbymchenry/snoop/main/scripts/install.ps1 | iex
+```
 
-## Quick start
+Building from source also works: `cargo install --path .` from a checkout.
 
-Create one database for the repository, index it, and ask a question:
+### 2. Wire up your agent(s)
+
+In a new terminal, run the installer to connect Snoop to the agents you use:
 
 ```bash
-cd /path/to/repository
+snoop install
+```
+
+Detects and auto-configures Pi, Claude Code, Cursor, Codex CLI, opencode,
+Gemini CLI, VS Code (GitHub Copilot), Windsurf, and Kiro — wiring the `snoop
+mcp` server into each. This is the step that connects Snoop to your agent;
+installing the CLI in step 1 does not do it on its own. It only wires up your
+agent — it does not index any code; building each project's index is the
+separate `snoop init` in step 3.
+
+`snoop install --list` previews detection without writing anything. `snoop
+install --agent <NAME>` wires one agent even when detection misses it.
+
+### 3. Initialize each project
+
+```bash
+cd your-project
 snoop init .
 snoop query "where is refresh-token validation performed?"
 ```
@@ -56,22 +79,31 @@ database for each repository. The default path is `<repository
 root>/.snoop/snoop.db`. `--db <PATH>` overrides both that default and
 `SNOOP_DB`.
 
-## Retrieval modes
+## Optional embeddings
 
 Without an embedder, Snoop uses BM25 retrieval, anchor expansion, role-aware
 admission, deduplication, and token budgeting. `snoop status` reports a
 `"retrieval_mode"` of `"lexical+anchors"`.
 
-To add vector channels, point Snoop at a compatible local llama.cpp server:
+To add vector channels, install a local llama.cpp embedding server once:
 
 ```bash
-export SNOOP_EMBED_URL=http://127.0.0.1:8097
-export SNOOP_EMBED_VERSION=Qwen3-Embedding-0.6B-Q8_0
+snoop install embedder
+```
+
+That downloads the llama.cpp server and the Qwen3-Embedding-0.6B-Q8_0 model
+into `~/.snoop` and writes `~/.snoop/config.json`. Start the server, then
+build vectors in each indexed project:
+
+```bash
+snoop embed
 snoop index
 ```
 
 Hybrid mode combines BM25 and vector results with reciprocal-rank fusion.
-`snoop status` then reports a `"retrieval_mode"` of `"hybrid"`.
+`snoop status` then reports a `"retrieval_mode"` of `"hybrid"`. `SNOOP_EMBED_URL`
+and `SNOOP_EMBED_VERSION` still override `config.json` for a manually managed
+server.
 
 ## Common commands
 
@@ -95,7 +127,8 @@ launch.
 - `SNOOP_DB`: Database path when `--db` is absent. Unset by default; without
   it, the database path defaults to `<repository root>/.snoop/snoop.db`.
 - `SNOOP_EMBED_URL`: llama.cpp server that enables hybrid retrieval. Unset by
-  default.
+  default; Snoop then reads `~/.snoop/config.json` written by `snoop install
+  embedder`.
 - `SNOOP_EMBED_VERSION`: Embedding model identifier stored with vectors.
   Defaults to `Qwen3-Embedding-0.6B-Q8_0`.
 - `SNOOP_ENSURE_TIMEOUT`: Extension refresh budget in seconds. Defaults to
@@ -106,8 +139,9 @@ launch.
 ## Pi session refresh
 
 [`extensions/snoop-pi.ts`](extensions/snoop-pi.ts) starts a detached
-`snoop ensure` on Pi session startup, new, resume, and fork events. Install it
-in the user or project extension directory:
+`snoop ensure` on Pi session startup, new, resume, and fork events. `snoop
+install` copies it to `~/.pi/agent/extensions/`. To install it manually, copy
+it to the user or project extension directory:
 
 ```bash
 cp extensions/snoop-pi.ts ~/.pi/agent/extensions/
