@@ -456,7 +456,8 @@ fn line_cursor_scans_each_prefix_byte_at_most_twice() {
     // symbol count co-growing grows scans < 2.5x (was ~4x, Theta(A' x S_f)).
     // Budget (advisory, machine-dependent): analyze_code wall <= 10 ms at
     // S_f = 100 KB (51 ms scan term before).
-    use std::sync::atomic::Ordering;
+    // take_line_scan_bytes resets the thread-local counter, so each loop
+    // iteration measures exactly its own analyze_code run.
     let build = |g: usize| {
         let mut source = String::new();
         for i in 0..g {
@@ -467,9 +468,8 @@ fn line_cursor_scans_each_prefix_byte_at_most_twice() {
     let mut previous_scan = 0u64;
     for g in [64usize, 128, 256] {
         let source = build(g);
-        let before = super::LINE_SCAN_BYTES.load(Ordering::Relaxed);
         let boundaries = super::analyze_code("src/x.rs", &source).unwrap();
-        let scanned = super::LINE_SCAN_BYTES.load(Ordering::Relaxed) - before;
+        let scanned = super::take_line_scan_bytes();
         assert!(
             scanned as usize <= 2 * source.len(),
             "scanned {scanned} bytes > 2 x S_f {} at G={g}",
@@ -484,4 +484,33 @@ fn line_cursor_scans_each_prefix_byte_at_most_twice() {
         previous_scan = scanned;
         assert_eq!(boundaries.len(), g, "one boundary per flat function");
     }
+}
+
+#[test]
+fn line_scan_counter_is_thread_local() {
+    // Defect-audit c1 (run 20260831023057-8ecdc8ca): the old process-global
+    // AtomicU64 pooled bytes across threads, so parallel analyze_code tests
+    // made the <= 2 x S_f guard flaky. The thread-local counter must count
+    // only the current thread's scans, even while other threads parse in
+    // parallel.
+    let source = "fn one() {\n    let _ = 1;\n}\n\nfn two() {\n    let _ = 2;\n}\n";
+    let _ = super::take_line_scan_bytes(); // reset baseline
+    super::analyze_code("src/x.rs", source).unwrap();
+    let baseline = super::take_line_scan_bytes();
+    assert!(baseline > 0, "analyze_code must scan some bytes");
+
+    let concurrent = std::thread::spawn(|| {
+        let noisy = "fn noise() {\n    let _ = 1;\n}\n".repeat(64);
+        super::analyze_code("src/noise.rs", &noisy).unwrap();
+        super::take_line_scan_bytes()
+    });
+
+    super::analyze_code("src/x.rs", source).unwrap();
+    let after = super::take_line_scan_bytes();
+    let noisy = concurrent.join().unwrap();
+    assert!(noisy > 0, "concurrent thread must scan its own bytes");
+    assert_eq!(
+        after, baseline,
+        "concurrent analyze_code on another thread leaked into this thread's counter"
+    );
 }

@@ -2,12 +2,29 @@ use std::collections::BTreeSet;
 use std::ops::{Range, RangeInclusive};
 
 use tree_sitter::{Node, Parser};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::cell::Cell;
 
 // Scaling-guard counter (computational-scaling-audit 20260830195149-6f1a96a5,
 // finding 2). Invariant: bytes scanned per analyze_code <= 2 x S_f for flat
 // symbol layout (was Theta(A' x S_f) prefix rescans).
-pub(crate) static LINE_SCAN_BYTES: AtomicU64 = AtomicU64::new(0);
+//
+// Thread-local so concurrent analyze_code calls (test parallelism) do not
+// pool their bytes into one shared total; each thread only ever measures its
+// own analyze_code run (defect-audit 20260831023057-8ecdc8ca c1).
+thread_local! {
+    pub(crate) static LINE_SCAN_BYTES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Read and reset the scaling-guard counter for the current thread.
+/// Callers take the baseline before and the total after an analyze_code run.
+#[cfg(test)]
+pub(crate) fn take_line_scan_bytes() -> u64 {
+    LINE_SCAN_BYTES.with(|counter| {
+        let total = counter.get();
+        counter.set(0);
+        total
+    })
+}
 
 use crate::core::{AtomKind, ParsedAtom};
 use crate::metadata::chunk_segments::ChunkSegment;
@@ -311,7 +328,9 @@ impl<'a> LineCursor<'a> {
             .iter()
             .filter(|&&byte| byte == b'\n')
             .count() as u32;
-        LINE_SCAN_BYTES.fetch_add((capped - self.byte) as u64, Ordering::Relaxed);
+        LINE_SCAN_BYTES.with(|scanned| {
+            scanned.set(scanned.get() + (capped - self.byte) as u64);
+        });
         self.line += newlines;
         self.byte = capped;
         self.line
