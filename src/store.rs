@@ -16,6 +16,11 @@ pub use records::{
 };
 pub use rows::{cosine, decode_f32, encode_f32};
 
+/// Display cap for anchor lookups (CLI and MCP): the oldest units serve, the
+/// rest are counted and reported as a truncation notice instead of being
+/// silently dropped (defect-audit 20260831023057-8ecdc8ca c6).
+pub const ANCHOR_LOOKUP_LIMIT: usize = 64;
+
 use crate::core::{Repository, Source, SourceId};
 use rows::{repository_from_row, source_from_row};
 use rusqlite::{params, Connection, OptionalExtension};

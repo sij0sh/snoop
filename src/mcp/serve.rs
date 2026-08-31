@@ -7,12 +7,14 @@
 //! embedder, so a stuck embedder cannot delay ping.
 
 use std::io::{BufRead, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{ToolFailure, ToolSuccess, control_response, dispatch_tool, error_response,
-            result_response, text_result};
+use super::{
+    control_response, dispatch_tool, error_response, result_response, text_result, ToolFailure,
+    ToolSuccess,
+};
 use crate::inference::Embedder;
 use crate::store::{Store, StoreOpenError};
 
@@ -20,8 +22,11 @@ use crate::store::{Store, StoreOpenError};
 /// `SNOOP_MCP_WORKERS` (default 4) and `SNOOP_EMBED_DEADLINE_MS` (default 2000).
 /// Rollback: workers=1 with a huge deadline restores the sequential behavior.
 pub struct ServeConfig {
-    /// Opens one `Store` per worker thread (a `rusqlite` connection is not
-    /// `Sync`, so the pool cannot share one handle).
+    /// Opens one `Store` per tool call (a `rusqlite` connection is not
+    /// `Sync`, so the pool cannot share one handle, and a connection held
+    /// across calls would keep serving an unlinked database file after a
+    /// reindex replaces it — defect-audit 20260831023057-8ecdc8ca c5). An
+    /// open failure fails only that job; the worker keeps serving.
     pub open_store: Arc<dyn Fn() -> Result<Store, StoreOpenError> + Send + Sync>,
     pub embedder: Option<Arc<dyn Embedder>>,
     pub workers: usize,
@@ -162,6 +167,14 @@ fn worker_response(
             result["degraded"] = serde_json::json!(true);
             result
         }),
+        Ok(ToolSuccess::Truncated(payload)) => result_response(id, {
+            let mut result =
+                text_result(serde_json::to_string_pretty(&payload).unwrap_or_default());
+            // Additive response field: the anchor lookup hit the display cap
+            // and only the oldest page is served (defect-audit c6).
+            result["truncated"] = serde_json::json!(true);
+            result
+        }),
         Err(ToolFailure::Usage { code, message }) => error_response(id, code, message),
         Err(ToolFailure::Error(message)) => result_response(id, {
             let mut result = text_result(message);
@@ -225,7 +238,6 @@ where
             let open_store = Arc::clone(&config.open_store);
             let embed_deadline = config.embed_deadline;
             scope.spawn(move || {
-                let store = (open_store)();
                 loop {
                     let message = {
                         let receiver = jobs_rx.lock().expect("job queue");
@@ -234,12 +246,22 @@ where
                     let Ok(message) = message else {
                         break;
                     };
-                    let response = match &store {
-                        Ok(store) => {
-                            worker_response(store, embedder.as_ref(), &breaker, embed_deadline, &message)
-                        }
+                    // Open per job so every answer reads the database file
+                    // that exists right now; a stale connection would serve
+                    // an unlinked inode after a reindex swaps the file (c5).
+                    let response = match (open_store)() {
+                        Ok(store) => worker_response(
+                            &store,
+                            embedder.as_ref(),
+                            &breaker,
+                            embed_deadline,
+                            &message,
+                        ),
                         Err(error) => error_response(
-                            message.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                            message
+                                .get("id")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
                             -32603,
                             format!("store open failed: {error}"),
                         ),
@@ -279,9 +301,7 @@ where
                         if let Some(response) = message
                             .get("method")
                             .and_then(|value| value.as_str())
-                            .and_then(|method| {
-                                control_response(method, id, message.get("params"))
-                            })
+                            .and_then(|method| control_response(method, id, message.get("params")))
                         {
                             if write_response(&mut output, &response).is_err() {
                                 break 'serve Err(std::io::Error::new(

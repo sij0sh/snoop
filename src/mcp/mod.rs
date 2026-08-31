@@ -3,7 +3,7 @@
 
 mod serve;
 
-pub use serve::{ServeConfig, serve};
+pub use serve::{serve, ServeConfig};
 
 use serve::BoundedEmbed;
 
@@ -15,16 +15,17 @@ use crate::store::Store;
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const DEFAULT_MAX_TOKENS: usize = 6_000;
 const MAX_TOKENS_LIMIT: usize = 32_000;
-const ANCHOR_LOOKUP_LIMIT: usize = 64;
+use crate::store::ANCHOR_LOOKUP_LIMIT;
 
 pub(crate) type Error = Box<dyn std::error::Error + Send + Sync>;
 
 pub fn symbol_context_entries(
     store: &Store,
     symbol: &str,
-) -> Result<Vec<serde_json::Value>, Error> {
+) -> Result<(Vec<serde_json::Value>, usize), Error> {
     let mut report = Vec::new();
-    for id in store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)? {
+    let (ids, more) = store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)?;
+    for id in ids {
         if let Some(unit) = store.unit_by_id(id)? {
             report.push(serde_json::json!({
                 "unit_id": id,
@@ -34,12 +35,16 @@ pub fn symbol_context_entries(
             }));
         }
     }
-    Ok(report)
+    Ok((report, more))
 }
 
-pub fn history_entries(store: &Store, symbol: &str) -> Result<Vec<serde_json::Value>, Error> {
+pub fn history_entries(
+    store: &Store,
+    symbol: &str,
+) -> Result<(Vec<serde_json::Value>, usize), Error> {
     let mut history = Vec::new();
-    for id in store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)? {
+    let (ids, more) = store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)?;
+    for id in ids {
         if let Some(unit) = store.unit_by_id(id)? {
             if unit.source_kind == SourceKind::GitCommit {
                 history.push(serde_json::json!({
@@ -51,7 +56,7 @@ pub fn history_entries(store: &Store, symbol: &str) -> Result<Vec<serde_json::Va
             }
         }
     }
-    Ok(history)
+    Ok((history, more))
 }
 
 fn tool_definitions() -> serde_json::Value {
@@ -117,6 +122,9 @@ enum ToolSuccess {
     /// Served without the embedder within its deadline; payload is complete
     /// but vector channels were dropped.
     Degraded(serde_json::Value),
+    /// The anchor lookup hit the display cap; the payload holds the oldest
+    /// page and the response carries `truncated: true` (defect-audit c6).
+    Truncated(serde_json::Value),
 }
 
 enum ToolFailure {
@@ -189,13 +197,25 @@ fn dispatch_tool(
         "repo_symbol_context" => {
             let symbol = required_symbol(arguments).map_err(ToolFailure::Error)?;
             symbol_context_entries(store, &symbol)
-                .map(|entries| ToolSuccess::Payload(serde_json::json!(entries)))
+                .map(|(entries, more)| {
+                    if more > 0 {
+                        ToolSuccess::Truncated(serde_json::json!(entries))
+                    } else {
+                        ToolSuccess::Payload(serde_json::json!(entries))
+                    }
+                })
                 .map_err(|error| ToolFailure::Error(error.to_string()))
         }
         "repo_history" => {
             let symbol = required_symbol(arguments).map_err(ToolFailure::Error)?;
             history_entries(store, &symbol)
-                .map(|entries| ToolSuccess::Payload(serde_json::json!(entries)))
+                .map(|(entries, more)| {
+                    if more > 0 {
+                        ToolSuccess::Truncated(serde_json::json!(entries))
+                    } else {
+                        ToolSuccess::Payload(serde_json::json!(entries))
+                    }
+                })
                 .map_err(|error| ToolFailure::Error(error.to_string()))
         }
         other => Err(ToolFailure::Usage {
@@ -223,7 +243,10 @@ pub fn handle_message(
     if method != "tools/call" {
         return control_response(method, &id, message.get("params"));
     }
-    let params = message.get("params").cloned().unwrap_or(serde_json::json!({}));
+    let params = message
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
     let name = params.get("name").and_then(|value| value.as_str());
     match name {
         Some(tool) => {
@@ -250,10 +273,19 @@ fn frame_tool_result(
 ) -> serde_json::Value {
     match outcome {
         Ok(success) => {
-            let payload = match success {
-                ToolSuccess::Payload(payload) | ToolSuccess::Degraded(payload) => payload,
+            let (payload, truncated) = match success {
+                ToolSuccess::Payload(payload) => (payload, false),
+                ToolSuccess::Degraded(payload) => (payload, false),
+                ToolSuccess::Truncated(payload) => (payload, true),
             };
-            result_response(id, text_result(serde_json::to_string_pretty(&payload).unwrap_or_default()))
+            let mut result =
+                text_result(serde_json::to_string_pretty(&payload).unwrap_or_default());
+            if truncated {
+                // Additive response field: the anchor lookup hit the display
+                // cap and only the oldest page is served (defect-audit c6).
+                result["truncated"] = serde_json::json!(true);
+            }
+            result_response(id, result)
         }
         Err(ToolFailure::Usage { code, message }) => error_response(id, code, message),
         Err(ToolFailure::Error(message)) => result_response(id, {

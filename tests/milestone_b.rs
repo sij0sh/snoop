@@ -99,7 +99,7 @@ fn anchors_are_emitted_for_every_source_kind() {
         "commit anchors emitted, got {kinds:?}"
     );
 
-    let doc_mentions_symbol = store
+    let (doc_mentions_symbol, _more) = store
         .units_for_anchor("symbol", "refresh_session", 32)
         .unwrap();
     assert!(

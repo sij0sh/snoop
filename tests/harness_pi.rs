@@ -136,7 +136,8 @@ fn sessions_table_populated_and_query_returns_agent_evidence() {
     let outcome =
         index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
 
-    let session_units = store.units_for_anchor("session", SESSION_ID, 32).unwrap();
+    let (session_units, session_more) = store.units_for_anchor("session", SESSION_ID, 32).unwrap();
+    assert_eq!(session_more, 0);
     assert_eq!(
         session_units.len(),
         2,

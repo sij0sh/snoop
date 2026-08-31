@@ -617,3 +617,38 @@ fn benchmark_config_table() {
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
 }
+
+/// Defect-audit c5 gate: MCP workers open one Store per tool call so answers
+/// follow the database file across reindexes. This measures that overhead on
+/// a populated file database. If the per-open cost ever becomes material
+/// relative to the embed deadline, revisit an identity-check reopen
+/// (same-file check before reusing a cached connection) — until then the
+/// simple per-request open wins on correctness.
+#[test]
+#[ignore]
+fn benchmark_store_open_per_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = directory.path().join("bench-open.db");
+    {
+        let mut store = Store::open(&db).unwrap();
+        store.bind_repository("/bench").unwrap();
+    }
+    // Warm the OS page cache and sqlite, then measure.
+    for _ in 0..5 {
+        drop(Store::open(&db).unwrap());
+    }
+    const OPENS: usize = 200;
+    let started = std::time::Instant::now();
+    for _ in 0..OPENS {
+        drop(Store::open(&db).unwrap());
+    }
+    let per_open = started.elapsed().as_secs_f64() * 1_000.0 / OPENS as f64;
+    println!(
+        "store open per request: {per_open:.3}ms across {OPENS} opens \
+         (embed deadline is 2000ms; overhead is material only near 1-2% of that)"
+    );
+    assert!(
+        per_open < 50.0,
+        "per-request open regressed past 50ms (was sub-ms): {per_open:.3}ms"
+    );
+}

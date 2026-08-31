@@ -344,8 +344,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     );
                 }
                 "symbol" => {
-                    let entries = snoop::mcp::symbol_context_entries(&store, &value)?;
+                    let (entries, more) = snoop::mcp::symbol_context_entries(&store, &value)?;
                     println!("{}", serde_json::to_string_pretty(&entries)?);
+                    if more > 0 {
+                        eprintln!(
+                            "note: +{more} more units not shown (capped at the oldest {})",
+                            snoop::store::ANCHOR_LOOKUP_LIMIT
+                        );
+                    }
                 }
                 other => return Err(format!("unknown inspect target: {other}").into()),
             }
@@ -353,15 +359,25 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Command::History { symbol, db } => {
             let store = open_store(&db_path(db))?;
             bound_repository(&store)?;
-            let entries = snoop::mcp::history_entries(&store, &symbol)?;
+            let (entries, more) = snoop::mcp::history_entries(&store, &symbol)?;
             println!("{}", serde_json::to_string_pretty(&entries)?);
+            if more > 0 {
+                eprintln!(
+                    "note: +{more} more units not shown (capped at the oldest {})",
+                    snoop::store::ANCHOR_LOOKUP_LIMIT
+                );
+            }
         }
         Command::Sessions { symbol, db } => {
             let store = open_store(&db_path(db))?;
             bound_repository(&store)?;
 
             let mut defining_files = std::collections::HashSet::new();
-            for id in store.units_for_anchor("symbol", &symbol, 64)? {
+            let mut hidden_units = 0_usize;
+            let (ids, more) =
+                store.units_for_anchor("symbol", &symbol, snoop::store::ANCHOR_LOOKUP_LIMIT)?;
+            hidden_units += more;
+            for id in ids {
                 if let Some(unit) = store.unit_by_id(id)? {
                     if unit.source_kind == snoop::core::SourceKind::Code {
                         for anchor in store.anchors_for_unit(id)? {
@@ -375,7 +391,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut episodes = Vec::new();
             let mut seen = std::collections::HashSet::new();
             for file in &defining_files {
-                for id in store.units_for_anchor("file", file, 64)? {
+                let (ids, more) =
+                    store.units_for_anchor("file", file, snoop::store::ANCHOR_LOOKUP_LIMIT)?;
+                hidden_units += more;
+                for id in ids {
                     if !seen.insert(id) {
                         continue;
                     }
@@ -392,6 +411,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
             println!("{}", serde_json::to_string_pretty(&episodes)?);
+            if hidden_units > 0 {
+                eprintln!(
+                    "note: +{hidden_units} more units not shown (capped at the oldest {})",
+                    snoop::store::ANCHOR_LOOKUP_LIMIT
+                );
+            }
         }
         Command::Mcp { db } => {
             let db_path = db_path(db);

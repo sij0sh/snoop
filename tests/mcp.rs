@@ -4,10 +4,10 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{HangingEmbedServer, McpChild, indexed_fixture, simple_fixture};
+use common::{indexed_fixture, simple_fixture, HangingEmbedServer, McpChild};
 use snoop::inference::MockEmbedder;
 use snoop::ingest::index_repository_bounded;
-use snoop::mcp::{ServeConfig, handle_message, serve, PROTOCOL_VERSION};
+use snoop::mcp::{handle_message, serve, ServeConfig, PROTOCOL_VERSION};
 use snoop::store::Store;
 
 fn memory_serve_config(embedder: Option<Arc<dyn snoop::inference::Embedder>>) -> ServeConfig {
@@ -368,8 +368,10 @@ fn ping_answers_while_tool_calls_wait_on_a_hung_embedder() {
     );
 
     for id in 1..=3 {
-        child.send(&serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
-            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}));
+        child.send(
+            &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}),
+        );
     }
     std::thread::sleep(Duration::from_millis(20));
     let ping_sent = std::time::Instant::now();
@@ -414,15 +416,14 @@ fn embed_breaker_opens_after_repeated_deadlines() {
     let url = embedder.url();
     let mut child = McpChild::start(
         &db,
-        &[
-            ("SNOOP_EMBED_URL", &url),
-            ("SNOOP_EMBED_DEADLINE_MS", "80"),
-        ],
+        &[("SNOOP_EMBED_URL", &url), ("SNOOP_EMBED_DEADLINE_MS", "80")],
     );
 
     for id in 1..=3 {
-        child.send(&serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
-            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}));
+        child.send(
+            &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}),
+        );
         let sent = std::time::Instant::now();
         let response = child
             .read_response(Duration::from_secs(5))
@@ -436,8 +437,10 @@ fn embed_breaker_opens_after_repeated_deadlines() {
     }
 
     // Breaker is open: the fourth query skips the embed entirely.
-    child.send(&serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
-        "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}));
+    child.send(
+        &serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
+        "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}),
+    );
     let sent = std::time::Instant::now();
     let response = child
         .read_response(Duration::from_secs(5))
@@ -447,5 +450,130 @@ fn embed_breaker_opens_after_repeated_deadlines() {
     assert!(
         elapsed < Duration::from_millis(50),
         "open breaker answers immediately: {elapsed:?}"
+    );
+}
+
+/// Defect-audit c5: the store opens per job. A failed open fails only that
+/// job (JSON-RPC error) and the worker keeps serving the next call.
+#[test]
+fn worker_survives_store_open_failure_and_serves_the_next_job() {
+    let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let config = ServeConfig {
+        open_store: {
+            let opens = Arc::clone(&opens);
+            Arc::new(move || {
+                if opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Store::open("/nonexistent-parent-dir/snoop-missing.db")
+                } else {
+                    Store::open_in_memory()
+                }
+            })
+        },
+        embedder: Some(Arc::new(MockEmbedder::new("mock-v1"))),
+        workers: 1,
+        embed_deadline: Duration::from_secs(2),
+    };
+    let script = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"repo_symbol_context\",\"arguments\":{\"symbol\":\"anything\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"repo_symbol_context\",\"arguments\":{\"symbol\":\"anything\"}}}\n",
+    );
+    let lines: Vec<serde_json::Value> = serve_collect(config, script)
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(lines.len(), 2, "both calls answered");
+    let failed = lines.iter().find(|line| line["id"] == 1).unwrap();
+    assert_eq!(failed["error"]["code"], -32603);
+    assert!(
+        failed["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("store open failed")),
+        "the failure is the store open: {failed}"
+    );
+    let served = lines.iter().find(|line| line["id"] == 2).unwrap();
+    assert!(
+        served["result"].is_object(),
+        "the worker must keep serving after a failed open: {served}"
+    );
+}
+
+/// Defect-audit c5 regression: a worker that kept its spawn-time connection
+/// answered from the unlinked inode after the database file was replaced by
+/// a reindex. Answers must follow the database file.
+#[test]
+fn worker_answers_follow_the_database_file_across_reindex() {
+    let (directory, db) = indexed_fixture();
+    let mut child = McpChild::start(&db, &[("SNOOP_EMBED_URL", "mock")]);
+
+    child.send(
+        &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-06-18","capabilities":{}}}),
+    );
+    child.send(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    child.send(
+        &serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"repo_symbol_context","arguments":{"symbol":"refresh_session"}}}),
+    );
+    let initialize = child
+        .read_response(Duration::from_secs(5))
+        .expect("initialize answered");
+    assert_eq!(initialize["id"], 1);
+    let before = child
+        .read_response(Duration::from_secs(5))
+        .expect("first call answered");
+    assert_eq!(before["id"], 2);
+    assert!(before["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("refresh_session"));
+
+    // Replace the database file underneath the running server: remove it
+    // with its WAL sidecars, then reindex with a new symbol into a fresh
+    // file at the same path.
+    for suffix in ["", "-wal", "-shm"] {
+        let path = std::path::PathBuf::from(format!("{}{}", db.display(), suffix));
+        let _ = std::fs::remove_file(&path);
+    }
+    let repo = directory.path().join("repo");
+    std::fs::write(
+        repo.join("src/extra.rs"),
+        "pub fn brand_new_symbol() {\n    helper();\n}\n\nfn helper() {}\n",
+    )
+    .unwrap();
+    let repo_arg = repo.to_str().unwrap();
+    let db_arg = db.to_str().unwrap();
+    for args in [
+        vec!["init", repo_arg, "--db", db_arg],
+        vec!["index", repo_arg, "--db", db_arg],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_snoop"))
+            .args(&args)
+            .env("SNOOP_EMBED_URL", "mock")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    child.send(
+        &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+        "params":{"name":"repo_symbol_context","arguments":{"symbol":"brand_new_symbol"}}}),
+    );
+    let after = child
+        .read_response(Duration::from_secs(5))
+        .expect("post-reindex call answered");
+    assert_eq!(after["id"], 3);
+    let entries: serde_json::Value =
+        serde_json::from_str(after["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let list = entries.as_array().expect("array payload");
+    assert!(
+        list.iter().any(|entry| entry["routing_text"]
+            .as_str()
+            .is_some_and(|text| text.contains("brand_new_symbol"))),
+        "the worker must answer from the replaced database file, not the stale inode: {list:?}"
     );
 }

@@ -264,9 +264,12 @@ fn anchors_resolve_kind_value_and_relationship() {
     );
     assert_eq!(
         store.units_for_anchor("file", "src/a.rs", 10).unwrap(),
-        vec![unit_id]
+        (vec![unit_id], 0)
     );
-    assert!(store.units_for_anchor("bogus", "x", 10).unwrap().is_empty());
+    assert_eq!(
+        store.units_for_anchor("bogus", "x", 10).unwrap(),
+        (Vec::new(), 0)
+    );
 }
 
 #[test]

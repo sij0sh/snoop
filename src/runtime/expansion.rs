@@ -49,7 +49,11 @@ pub(crate) fn plan_expansion(
         for anchor in store.anchors_for_unit(seed)? {
             let kind = anchor.kind.as_str();
             let value = anchor.value.as_str();
-            let connected = store.units_for_anchor(kind, value, EXPANSION_CANDIDATES_PER_ANCHOR)?;
+            // Budget-bounded by design: EXPANSION_CANDIDATES_PER_ANCHOR is a
+            // ranking budget, not a display promise, so the truncation count
+            // is intentionally ignored here (defect-audit c6 pins this).
+            let (connected, _more) =
+                store.units_for_anchor(kind, value, EXPANSION_CANDIDATES_PER_ANCHOR)?;
             for candidate in connected {
                 if candidate == seed {
                     continue;
