@@ -22,12 +22,16 @@ use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 pub const INDEX_FORMAT_VERSION: &str = "phase-13-v1";
 
 /// Operation-owned index lease TTL in seconds.
-/// The operation renews the lease before every embed request, so the TTL only
-/// has to outlive a single embed batch (observed worst case ~300s); 360s adds
-/// a 60s margin so the lease never lapses mid-request.
+/// The operation renews the lease before every embed chunk and again before
+/// every in-batch retry, so the TTL only has to outlive a single embed
+/// attempt (observed worst case ~300s); 360s adds a 60s margin so the lease
+/// never lapses while work is in flight (defect-audit 20260831023057-8ecdc8ca
+/// c2: retries previously had no renewal, so a slow batch could outlive the
+/// lease and race its new holder).
 pub const INDEX_LEASE_TTL_SECS: i64 = 360;
 
-/// Maximum sources per embed request; the lease is renewed before each chunk.
+/// Maximum sources per embed request; the lease is renewed before each chunk
+/// and before each retry of a chunk.
 pub const EMBED_CHUNK_LEN: usize = 32;
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -421,10 +425,20 @@ pub fn index_embeddings(
                 return Err("index lease lost during embedding".into());
             }
             let texts: Vec<String> = page.iter().map(|(_, text)| text.clone()).collect();
-            let vectors = match backfill::embed_batch_bounded(embedder, &texts, deadline) {
+            let vectors = match backfill::embed_batch_bounded(embedder, &texts, deadline, || {
+                store
+                    .renew_lease(lease_owner, INDEX_LEASE_TTL_SECS)
+                    .map_err(std::convert::Into::into)
+            }) {
                 Ok(vectors) => vectors,
                 Err(error) if error.is::<backfill::BudgetExhausted>() => {
                     return Ok((embedded, true));
+                }
+                Err(error) if error.is::<backfill::LeaseLost>() => {
+                    // The lease expired mid-batch-retry and a new holder
+                    // stole it. Abort before writing so we never race the
+                    // new holder's FK/vectors (defect-audit c2).
+                    return Err("index lease lost during embedding".into());
                 }
                 Err(error) => return Err(error),
             };
