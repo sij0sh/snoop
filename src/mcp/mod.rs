@@ -27,12 +27,17 @@ pub fn symbol_context_entries(
     let (ids, more) = store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)?;
     for id in ids {
         if let Some(unit) = store.unit_by_id(id)? {
-            report.push(serde_json::json!({
+            let mut entry = serde_json::json!({
                 "unit_id": id,
                 "source_kind": unit.source_kind.as_str(),
                 "locator": unit.locator,
                 "routing_text": unit.routing_text,
-            }));
+            });
+            if unit.source_kind == SourceKind::GitCommit {
+                entry["timestamp"] = serde_json::json!(unit.timestamp);
+                entry["evidence_text"] = serde_json::json!(unit.evidence_text);
+            }
+            report.push(entry);
         }
     }
     Ok((report, more))
@@ -81,7 +86,7 @@ fn tool_definitions() -> serde_json::Value {
         {
             "name": "repo_symbol_context",
             "description": "Return all units (code, docs, commits, agent episodes) anchored \
-                            to a symbol name.",
+                            to a symbol name; commit units carry timestamp and evidence_text.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -90,17 +95,6 @@ fn tool_definitions() -> serde_json::Value {
                 "required": ["symbol"]
             }
         },
-        {
-            "name": "repo_history",
-            "description": "Return git commit units that changed a symbol, newest context first.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string", "description": "Symbol name, e.g. refresh_session"}
-                },
-                "required": ["symbol"]
-            }
-        }
     ])
 }
 
@@ -197,18 +191,6 @@ fn dispatch_tool(
         "repo_symbol_context" => {
             let symbol = required_symbol(arguments).map_err(ToolFailure::Error)?;
             symbol_context_entries(store, &symbol)
-                .map(|(entries, more)| {
-                    if more > 0 {
-                        ToolSuccess::Truncated(serde_json::json!(entries))
-                    } else {
-                        ToolSuccess::Payload(serde_json::json!(entries))
-                    }
-                })
-                .map_err(|error| ToolFailure::Error(error.to_string()))
-        }
-        "repo_history" => {
-            let symbol = required_symbol(arguments).map_err(ToolFailure::Error)?;
-            history_entries(store, &symbol)
                 .map(|(entries, more)| {
                     if more > 0 {
                         ToolSuccess::Truncated(serde_json::json!(entries))

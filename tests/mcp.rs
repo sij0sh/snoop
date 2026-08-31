@@ -70,7 +70,7 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
         .collect();
     assert_eq!(
         names,
-        ["get_repo_context", "repo_symbol_context", "repo_history"]
+        ["get_repo_context", "repo_symbol_context"]
     );
     for tool in tools["result"]["tools"].as_array().unwrap() {
         assert!(!tool["description"].as_str().unwrap().is_empty());
@@ -98,7 +98,7 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
         &store,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
-            "params": {"name": "repo_history", "arguments": {}}}),
+            "params": {"name": "repo_symbol_context", "arguments": {}}}),
     )
     .unwrap();
     assert_eq!(empty_symbol["result"]["isError"], true);
@@ -236,8 +236,6 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
             "params":{"name":"get_repo_context","arguments":{
                 "query":"why does refresh_session rotate the token","max_tokens":2000}}}),
         serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
-            "params":{"name":"repo_history","arguments":{"symbol":"refresh_session"}}}),
-        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call",
             "params":{"name":"repo_symbol_context","arguments":{"symbol":"refresh_session"}}}),
     ];
     {
@@ -279,7 +277,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 3);
+    assert_eq!(names.len(), 2);
 
     let get_context = by_id(3);
     assert!(get_context["result"]["isError"].is_null());
@@ -312,16 +310,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         );
     }
 
-    let history = by_id(4);
-    let history_entries: serde_json::Value =
-        serde_json::from_str(history["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    let history_list = history_entries.as_array().unwrap();
-    assert!(!history_list.is_empty(), "repo_history answers commits");
-    assert!(history_list.iter().any(|entry| entry["evidence_text"]
-        .as_str()
-        .is_some_and(|text| text.contains("cache step"))));
-
-    let symbol = by_id(5);
+    let symbol = by_id(4);
     let symbol_entries: serde_json::Value =
         serde_json::from_str(symbol["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     let symbol_list = symbol_entries.as_array().unwrap();
@@ -331,11 +320,20 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
             .any(|entry| entry["source_kind"] == "code"),
         "repo_symbol_context answers current code"
     );
+    let commits = symbol_list
+        .iter()
+        .filter(|entry| entry["source_kind"] == "git_commit")
+        .collect::<Vec<_>>();
+    assert!(!commits.is_empty(), "repo_symbol_context answers history");
     assert!(
-        symbol_list
-            .iter()
-            .any(|entry| entry["source_kind"] == "git_commit"),
-        "repo_symbol_context answers the symbol's history"
+        commits.iter().any(|entry| entry["evidence_text"]
+            .as_str()
+            .is_some_and(|text| text.contains("cache step"))),
+        "commit entries carry evidence_text"
+    );
+    assert!(
+        commits.iter().all(|entry| entry["timestamp"].is_i64()),
+        "commit entries carry timestamp"
     );
 }
 

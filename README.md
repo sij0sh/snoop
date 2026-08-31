@@ -159,11 +159,10 @@ Run the stdio MCP server over an existing index:
 snoop mcp
 ```
 
-It implements JSON-RPC 2.0 and exposes three tools:
+It implements JSON-RPC 2.0 and exposes two tools:
 
 - `get_repo_context` accepts `query` and optional `max_tokens`. It returns a
   token-budgeted context packet.
 - `repo_symbol_context` accepts `symbol`. It returns code, docs, commits, and
-  agent episodes anchored to that symbol.
-- `repo_history` accepts `symbol`. It returns Git commit units that changed
-  that symbol.
+  agent episodes anchored to that symbol; commit entries carry their timestamp
+  and evidence text.
