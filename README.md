@@ -44,9 +44,7 @@ Create one database for the repository, index it, and ask a question:
 
 ```bash
 cd /path/to/repository
-export SNOOP_DB="$PWD/.snoop.db"
 snoop init .
-snoop status
 snoop query "where is refresh-token validation performed?"
 ```
 
@@ -54,8 +52,9 @@ The query prints a JSON context packet. Add `--explain` to write selection
 diagnostics to stderr. Use `--evidence-only` to omit routing channels.
 
 Each database belongs to exactly one canonical repository root. Use a separate
-database for each repository. The default path is `~/.snoop/snoop.db`.
-`--db <PATH>` overrides both that default and `SNOOP_DB`.
+database for each repository. The default path is `<repository
+root>/.snoop/snoop.db`. `--db <PATH>` overrides both that default and
+`SNOOP_DB`.
 
 ## Retrieval modes
 
@@ -93,8 +92,8 @@ launch.
 
 ## Configuration
 
-- `SNOOP_DB`: Database path when `--db` is absent. Defaults to
-  `~/.snoop/snoop.db`.
+- `SNOOP_DB`: Database path when `--db` is absent. Unset by default; without
+  it, the database path defaults to `<repository root>/.snoop/snoop.db`.
 - `SNOOP_EMBED_URL`: llama.cpp server that enables hybrid retrieval. Unset by
   default.
 - `SNOOP_EMBED_VERSION`: Embedding model identifier stored with vectors.
@@ -123,7 +122,7 @@ Set `SNOOP_ENSURE=0` to disable the trigger. Spawn failures are appended to
 Run the stdio MCP server over an existing index:
 
 ```bash
-snoop mcp --db .snoop.db
+snoop mcp
 ```
 
 It implements JSON-RPC 2.0 and exposes three tools:

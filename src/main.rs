@@ -77,12 +77,16 @@ enum Command {
     },
 }
 
-fn db_path(path: Option<PathBuf>) -> PathBuf {
-    path.or_else(|| std::env::var_os("SNOOP_DB").map(PathBuf::from))
-        .unwrap_or_else(|| {
-            let home = std::env::home_dir().expect("cannot resolve home directory");
-            home.join(".snoop").join("snoop.db")
-        })
+fn db_path(
+    path: Option<PathBuf>,
+    start: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(path) = path.or_else(|| std::env::var_os("SNOOP_DB").map(PathBuf::from)) {
+        return Ok(path);
+    }
+    Ok(scanner::repository_root(start)?
+        .join(".snoop")
+        .join("snoop.db"))
 }
 
 fn open_store(path: &Path) -> Result<Store, Box<dyn std::error::Error + Send + Sync>> {
@@ -177,7 +181,7 @@ fn main() {
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match cli.command {
         Command::Init { path, db } => {
-            let mut store = open_store(&db_path(db))?;
+            let mut store = open_store(&db_path(db, &path)?)?;
             let root = scanner::repository_root(&path)?;
             let repository = store.bind_repository(&root.to_string_lossy())?;
             let outcome = index_repository_bounded(&mut store, &root, None, None)?;
@@ -194,7 +198,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             );
         }
         Command::Index { path, db } => {
-            let mut store = open_store(&db_path(db))?;
+            let start = path.clone().unwrap_or_else(|| PathBuf::from("."));
+            let mut store = open_store(&db_path(db, &start)?)?;
             let root = match path {
                 Some(path) => scanner::repository_root(&path)?,
                 None => PathBuf::from(bound_repository(&store)?.root_path),
@@ -214,7 +219,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(root) => root,
                 Err(error) => print_ensure_error(error.to_string()),
             };
-            let mut store = match open_store(&db_path(db)) {
+            let mut store = match open_store(&db_path(db, &path)?) {
                 Ok(store) => store,
                 Err(error) => print_ensure_error(error.to_string()),
             };
@@ -258,7 +263,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::Status { db } => {
-            let store = open_store(&db_path(db))?;
+            let store = open_store(&db_path(db, Path::new("."))?)?;
             bound_repository(&store)?;
             let mut status = serde_json::to_value(store.stats()?)?;
             let embedder = embedder();
@@ -285,7 +290,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             explain,
             evidence_only,
         } => {
-            let store = open_store(&db_path(db))?;
+            let store = open_store(&db_path(db, Path::new("."))?)?;
             bound_repository(&store)?;
             let embedder = embedder();
             let channels = if evidence_only {
@@ -314,7 +319,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("{}", serde_json::to_string_pretty(&report.packet)?);
         }
         Command::Inspect { target, value, db } => {
-            let store = open_store(&db_path(db))?;
+            let store = open_store(&db_path(db, Path::new("."))?)?;
             bound_repository(&store)?;
             match target.as_str() {
                 "unit" => {
@@ -357,7 +362,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
         Command::History { symbol, db } => {
-            let store = open_store(&db_path(db))?;
+            let store = open_store(&db_path(db, Path::new("."))?)?;
             bound_repository(&store)?;
             let (entries, more) = snoop::mcp::history_entries(&store, &symbol)?;
             println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -369,7 +374,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
         Command::Sessions { symbol, db } => {
-            let store = open_store(&db_path(db))?;
+            let store = open_store(&db_path(db, Path::new("."))?)?;
             bound_repository(&store)?;
 
             let mut defining_files = std::collections::HashSet::new();
@@ -419,7 +424,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
         Command::Mcp { db } => {
-            let db_path = db_path(db);
+            let db_path = db_path(db, Path::new("."))?;
             let store = open_store(&db_path)?;
             bound_repository(&store)?;
             // deadline. workers=1 with a huge deadline restores old behavior.
