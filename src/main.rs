@@ -93,7 +93,7 @@ fn db_path(
         return Ok(path);
     }
     Ok(scanner::repository_root(start)?
-        .join(".snoop")
+        .join(".agents")
         .join("snoop.db"))
 }
 

@@ -76,7 +76,7 @@ diagnostics to stderr. Use `--evidence-only` to omit routing channels.
 
 Each database belongs to exactly one canonical repository root. Use a separate
 database for each repository. The default path is `<repository
-root>/.snoop/snoop.db`. `--db <PATH>` overrides both that default and
+root>/.agents/snoop.db`. `--db <PATH>` overrides both that default and
 `SNOOP_DB`.
 
 ## Optional embeddings
@@ -125,7 +125,7 @@ launch.
 ## Configuration
 
 - `SNOOP_DB`: Database path when `--db` is absent. Unset by default; without
-  it, the database path defaults to `<repository root>/.snoop/snoop.db`.
+  it, the database path defaults to `<repository root>/.agents/snoop.db`.
 - `SNOOP_EMBED_URL`: llama.cpp server that enables hybrid retrieval. Unset by
   default; Snoop then reads `~/.snoop/config.json` written by `snoop install
   embedder`.
