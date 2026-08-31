@@ -1,141 +1,114 @@
-# snoop
+# Snoop
 
-`snoop` is a local repository context compiler for coding agents.
+> Give coding agents compact, evidence-grounded context from a repository's code, history, documentation, and prior work.
 
-Snoop indexes current code (Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java, C#, C, C++), Markdown, text, git history, and prior agent sessions (Pi). It stores self-contained retrieval units in SQLite. It creates deterministic evidence and routing projections. Queries run over four local channels (evidence/routing x BM25/vector) with reciprocal-rank fusion and anchor expansion. It performs no query-time generative-LLM call.
+Snoop is a local repository context compiler that builds a SQLite index and returns deterministic context packets without a query-time generative LLM.
 
-## Build and test
+## Why Snoop?
+
+Coding agents often search the current tree but miss why code changed, where a symbol is discussed, or what an earlier agent already tried. Snoop joins those sources into retrieval units that an agent can query through the CLI or MCP.
+
+- Keep repository evidence local in SQLite.
+- Combine current code, Markdown, text, up to 500 Git commits, and Pi session history.
+- Retrieve with lexical search and symbol anchors without configuring an embedding model.
+- Add local llama.cpp embeddings for hybrid lexical and vector retrieval.
+- Cap each result by an explicit evidence token budget.
+
+Snoop parses Rust, Python, TypeScript, TSX, JavaScript, JSX, Go, Java, C#, C, C++, Ruby, PHP, and shell code. Repository scanning respects Git ignore rules.
+
+## Prerequisites
+
+- A Rust toolchain with Cargo.
+- Git when indexing Git history.
+- An optional llama.cpp embedding server for hybrid retrieval.
+
+## Install
+
+From the repository root:
 
 ```bash
-cargo build
-cargo test
+cargo install --path .
 ```
 
-## CLI
+For development, run `cargo build` and `cargo test`.
+
+## Quick start
+
+Create one database for the repository, index it, and ask a question:
 
 ```bash
+cd /path/to/repository
+export SNOOP_DB="$PWD/.snoop.db"
 snoop init .
-snoop index
 snoop status
-snoop ensure .
 snoop query "where is refresh-token validation performed?"
-snoop query "where is refresh-token validation performed?" --explain
-snoop query "where is refresh-token validation performed?" --evidence-only
-snoop inspect unit 381
-snoop inspect symbol refresh_session
-snoop history refresh_session
-snoop sessions refresh_session
 ```
 
-The default database is `~/.snoop/snoop.db`. Set `SNOOP_DB` or pass `--db` to override it.
+The query prints a JSON context packet. Add `--explain` to write selection diagnostics to stderr, or use `--evidence-only` to omit routing channels.
 
-One database holds exactly one repository. The first `snoop init`/`index`/`ensure` binds the
-database to that repository's canonical root; a second root is refused instead of silently
-sharing. A database in any other on-disk format is refused too: delete it and index the
-repository again.
+Each database belongs to exactly one canonical repository root. Use a separate database for each repository. The default path is `~/.snoop/snoop.db`; `--db <PATH>` overrides both that default and `SNOOP_DB`.
 
-Queries emit lean packets: each item carries only source kind, locator, evidence text, and timestamp. `snoop query --explain` additionally prints selection diagnostics to stderr (selected unit IDs, source slices, resolved anchors, selection reasons, channel and fused rankings, anchor-expansion decisions). `max_tokens` is an evidence budget: the sum of admitted evidence never exceeds it.
+## Retrieval modes
 
-Without a configured embedder, Snoop runs in **lexical-and-anchor mode**: evidence and routing
-BM25, anchor expansion, role-aware admission, content-hash deduplication, and token budgeting.
-No vectors are stored or searched, and `snoop status` reports `"retrieval_mode":
-"lexical+anchors"`. Point `SNOOP_EMBED_URL` at a local llama.cpp server to upgrade to hybrid
-mode, which adds the evidence-vector and routing-vector channels, four-channel RRF, and
-vector near-duplicate filtering (status then reports `"retrieval_mode": "hybrid"` plus
+Without an embedder, Snoop uses BM25 retrieval, anchor expansion, role-aware admission, deduplication, and token budgeting. `snoop status` reports `"retrieval_mode": "lexical+anchors"`.
+
+To add vector channels, point Snoop at a compatible local llama.cpp server:
 
 ```bash
 export SNOOP_EMBED_URL=http://127.0.0.1:8097
 export SNOOP_EMBED_VERSION=Qwen3-Embedding-0.6B-Q8_0
+snoop index
 ```
 
-Query and retrieval are fully deterministic and perform no generative-LLM call at any stage. Packet assembly is role-aware by default:
+Hybrid mode combines evidence and routing results from BM25 and vector search with reciprocal-rank fusion. `snoop status` then reports `"retrieval_mode": "hybrid"`.
 
-1. Detect query facets (rationale, evolution, validation, prior work, conflict, current behavior) from the query text.
-2. Map source kinds to evidence roles: code -> current truth, docs -> design rationale, git -> change origin, sessions -> prior work.
-3. Admit one unit per facet-required role first.
-4. Admit one unit per remaining supporting role.
-5. Fill the rest of the token budget in fused-rank order.
-
-The query-time Evidence Curator was spiked and deleted after failing its adoption gate at equal token budget (it matched but did not beat the deterministic role-aware builder); the review lives in `.pi-files/review-evidence-curator.md`. The earlier opt-in semantic chunk scorer was retired the same way (zero failures, no recall lift).
-## Lifecycle indexing
-
-`snoop ensure` refreshes a repository's index. It is safe to run unattended and is the integration surface for pre-launch freshness:
+## Common commands
 
 ```bash
-snoop ensure [PATH] [--db <DB>] [--timeout <SECS>]
+snoop index [PATH]                  # Refresh an existing index
+snoop ensure [PATH] --timeout 120   # Refresh safely for unattended use
+snoop query "question" --tokens 6000
+snoop inspect symbol refresh_session
+snoop inspect unit 381
+snoop history refresh_session
+snoop sessions refresh_session
 ```
 
-- Auto-initializes the repository, then indexes changed sources and embeddings (no cards).
-- Prints one JSON object: `"status"` is `refreshed` | `up-to-date` | `timeout` | `locked` | `error` (with `outcome` when refreshed or up-to-date, `error` on failure).
-- Exit code 0 for every status except `error` (1): a launch is never blocked. `locked` means another indexer holds the lease and owns freshness.
-- `--timeout` defaults to `SNOOP_ENSURE_TIMEOUT` (seconds), else 120. A timed-out run self-heals: git tip stays untouched, deletions are skipped, and the next run completes the refresh.
+`ensure` prints one JSON object with a `refreshed`, `up-to-date`, `timeout`, `locked`, or `error` status. Concurrent refreshes are safe: a second process reports `locked`. Every status except `error` exits successfully, so freshness work does not block an agent launch.
 
-### Pi extension
+## Configuration
 
-`extensions/snoop-pi.ts` spawns `snoop ensure` detached on every pi session start (`startup`, `new`, `resume`, `fork`; not `reload`), so launches stay instant and freshness is eventual. Copy it into place:
+| Setting | Purpose | Default |
+|---|---|---|
+| `SNOOP_DB` | Database path when `--db` is absent | `~/.snoop/snoop.db` |
+| `SNOOP_EMBED_URL` | Enable hybrid retrieval through a llama.cpp server | Unset |
+| `SNOOP_EMBED_VERSION` | Identify the embedding model stored with vectors | `Qwen3-Embedding-0.6B-Q8_0` |
+| `SNOOP_ENSURE_TIMEOUT` | Budget for extension-triggered refreshes | `120` seconds |
+| `SNOOP_SESSIONS_ROOT` | Override the Pi session directory | `~/.pi/agent/sessions` |
+
+## Pi session refresh
+
+[`extensions/snoop-pi.ts`](extensions/snoop-pi.ts) starts a detached `snoop ensure` on Pi session startup, new, resume, and fork events. Install it in the user or project extension directory:
 
 ```bash
-cp extensions/snoop-pi.ts ~/.pi/agent/extensions/   # or <project>/.pi/extensions/
+cp extensions/snoop-pi.ts ~/.pi/agent/extensions/
+# or: cp extensions/snoop-pi.ts .pi/extensions/
 ```
 
-- `SNOOP_ENSURE=0` disables the trigger.
-- `SNOOP_ENSURE_TIMEOUT` sets the ensure budget in seconds (default 120).
-- Spawn failures (missing binary, permissions) are appended to `.snoop-ensure.log` in the project directory instead of failing silently.
-
-### Blocking pre-launch (shell)
-
-When the first query of a session must see a fresh index, block explicitly:
-
-```bash
-snoop ensure . --timeout 30 && exec <agent>
-```
-
-### Cron
-
-```cron
-*/15 * * * * cd /path/to/repo && snoop ensure . >> .snoop-cron.log 2>&1
-```
-
-Overlap is safe: a second ensure reports `locked` and exits 0.
-
-### Bounds and tuning
-
-- The deadline plus one in-flight embed batch bounds wall time (ureq caps a batch at 300 s). Blocking callers should size `--timeout` with headroom.
-- Concurrency safety is `busy_timeout` plus a per-repository lease: a single active indexer holds within the lease TTL. The TTL is fixed at 360 s (300 s embed-batch cap + 60 s slack) and renewed per embed batch, so a holder that stalls past TTL may be stolen; per-source transactions keep the index consistent. These behaviors are pinned in `tests/concurrency.rs`.
-- Tune `SNOOP_ENSURE_TIMEOUT` from `index_runs.duration_ms` (`snoop status`) after real-embedder use; 120 s is provisional.
+Set `SNOOP_ENSURE=0` to disable the trigger. Spawn failures are appended to `.snoop-ensure.log` in the project directory.
 
 ## MCP server
 
-`snoop mcp` runs a synchronous stdio MCP server (newline-delimited JSON-RPC 2.0, protocol 2025-06-18) over an existing index:
+Run the stdio MCP server over an existing index:
 
 ```bash
 snoop mcp --db .snoop.db
 ```
 
-It exposes exactly three tools:
+It implements JSON-RPC 2.0 and exposes three tools:
 
-| Tool | Input | Returns |
+| Tool | Input | Result |
 |---|---|---|
-| `get_repo_context` | `query` (string, required), `max_tokens` (integer, default 6000) | Evidence-budgeted context packet across current code, docs, git history, and prior agent work |
-| `repo_symbol_context` | `symbol` (string, required) | Every unit anchored to the symbol (code, docs, commits) |
-| `repo_history` | `symbol` (string, required) | Git commit units that changed the symbol |
-
-Notifications produce no response. Unknown methods return JSON-RPC `-32601` and malformed lines return `-32700`. Tool-usage errors return `-32602` or a tool-level `isError` result. The server never exposes internal channel scores or index internals; responses are finished packets and entries.
-
-## Current scope
-
-Included:
-
-- gitignore-aware repository scanning.
-- Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java, C#, C, and C++ code parsing.
-- in-memory atom parsing (offsets, breadcrumbs, BLAKE3 hashes) feeding retrieval units.
-- deterministic retrieval units and routing projections.
-- incremental source and unit reuse (git tip boundary, session appends).
-- git-history ingestion with diff-to-symbol alignment.
-- Pi session adapter normalizing prior agent work into one unit per user turn (append-stable, deterministic).
-- anchor graph and query-time anchor expansion.
-- SQLite FTS5 indexing and sqlite-vec cosine distance search (opt-in via `SNOOP_EMBED_URL`).
-- local llama.cpp embedding adapter plus a mock adapter for tests.
-- evidence-only and four-channel retrieval; lexical-and-anchor mode when no embedder is configured.
-- RRF, evidence budgeting, near-duplicate filtering, role-aware packet assembly, and opt-in explain diagnostics.
-- stdio MCP server with three tools.
+| `get_repo_context` | `query`, optional `max_tokens` | A token-budgeted context packet |
+| `repo_symbol_context` | `symbol` | Code, docs, commits, and agent episodes anchored to a symbol |
+| `repo_history` | `symbol` | Git commit units that changed a symbol |
