@@ -79,7 +79,10 @@ enum Command {
 
 fn db_path(path: Option<PathBuf>) -> PathBuf {
     path.or_else(|| std::env::var_os("SNOOP_DB").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from(".snoop.db"))
+        .unwrap_or_else(|| {
+            let home = std::env::home_dir().expect("cannot resolve home directory");
+            home.join(".snoop").join("snoop.db")
+        })
 }
 
 fn open_store(path: &Path) -> Result<Store, Box<dyn std::error::Error + Send + Sync>> {

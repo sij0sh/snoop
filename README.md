@@ -27,7 +27,7 @@ snoop history refresh_session
 snoop sessions refresh_session
 ```
 
-The default database is `.snoop.db`. Set `SNOOP_DB` or pass `--db` to override it.
+The default database is `~/.snoop/snoop.db`. Set `SNOOP_DB` or pass `--db` to override it.
 
 One database holds exactly one repository. The first `snoop init`/`index`/`ensure` binds the
 database to that repository's canonical root; a second root is refused instead of silently
