@@ -135,21 +135,10 @@ impl<'a> EmitContext<'a> {
                 .saturating_sub(breadcrumb.chars().count() + 2)
                 .max(1);
             let segments = legal_segments(node, source, max_chars, self.language.is_atomic);
-            let alternative_segments = if segments.is_empty() {
-                Vec::new()
-            } else {
-                legal_segments(
-                    node,
-                    source,
-                    (max_chars * 3 / 4).max(1),
-                    self.language.is_atomic,
-                )
-            };
             let leading_context = (self.language.leading_context)(node, source);
             let is_import = !root_overview && (self.language.is_import)(node, source);
             let mut metadata = serde_json::json!({
                 "file": self.locator,
-                "chunk_alternatives": crate::metadata::chunk_segments::value(&alternative_segments),
                 "node_kind": node.kind(),
             });
             crate::metadata::code_symbol::write(

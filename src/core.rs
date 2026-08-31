@@ -167,8 +167,6 @@ impl UnitKind {
             "code" => Some(Self::Code),
             "git" => Some(Self::Git),
             "episode" => Some(Self::Episode),
-            // Legacy rows written by the retired segmentation policy.
-            "episode_segment" => Some(Self::Episode),
             _ => None,
         }
     }

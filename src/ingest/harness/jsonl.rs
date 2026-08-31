@@ -42,8 +42,6 @@ struct ContentBlock {
     arguments: Option<serde_json::Value>,
     #[serde(default, rename = "toolCallId")]
     tool_call_id: Option<String>,
-    #[serde(default, rename = "tool_use_id")]
-    tool_use_id: Option<String>,
     #[serde(default, rename = "toolName")]
     tool_name: Option<String>,
 }
@@ -238,18 +236,11 @@ pub(super) fn read_session_id(path: &Path) -> Option<String> {
 }
 
 fn block_call_id(block: &ContentBlock) -> Option<String> {
-    block
-        .id
-        .clone()
-        .or_else(|| block.tool_call_id.clone())
-        .or_else(|| block.tool_use_id.clone())
+    block.id.clone().or_else(|| block.tool_call_id.clone())
 }
 
 fn block_result_id(block: &ContentBlock) -> Option<String> {
-    block
-        .tool_call_id
-        .clone()
-        .or_else(|| block.tool_use_id.clone())
+    block.tool_call_id.clone()
 }
 
 fn outcome_from_payload(raw: &str, outcome: &mut BashOutcome) {
@@ -260,15 +251,9 @@ fn outcome_from_payload(raw: &str, outcome: &mut BashOutcome) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
         return;
     };
-    let exit = value
-        .get("exitCode")
-        .or_else(|| value.get("exit_code"))
-        .and_then(|value| value.as_i64());
-    let duration = value
-        .get("durationMs")
-        .or_else(|| value.get("duration_ms"))
-        .and_then(|value| value.as_i64());
-    let counts = ["testsPassed", "tests_passed", "passed", "failed", "total"]
+    let exit = value.get("exitCode").and_then(|value| value.as_i64());
+    let duration = value.get("durationMs").and_then(|value| value.as_i64());
+    let counts = ["testsPassed", "passed", "failed", "total"]
         .iter()
         .filter_map(|key| {
             value

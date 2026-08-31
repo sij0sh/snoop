@@ -19,7 +19,7 @@ use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 /// in `crate::metadata` changes its persisted shape, so existing databases
 /// rebuild every source on the next index run instead of serving old-shape
 /// rows (see the upgrade policy in `src/metadata.rs`).
-pub const INDEX_FORMAT_VERSION: &str = "phase-13-v1";
+pub const INDEX_FORMAT_VERSION: &str = "phase-14";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed chunk and again before

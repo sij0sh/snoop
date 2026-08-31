@@ -40,10 +40,7 @@ pub(super) fn tool_ref(name: &str, arguments: &serde_json::Value) -> ToolRef {
     let lowered = name.to_ascii_lowercase();
     match lowered.as_str() {
         "read" | "edit" | "write" => {
-            let path = arguments["path"]
-                .as_str()
-                .or_else(|| arguments["file_path"].as_str());
-            if let Some(path) = path {
+            if let Some(path) = arguments["path"].as_str() {
                 if let Some(file) = extract_file(path) {
                     files.push(file.clone());
                     summary = format!("{name} {file}");
