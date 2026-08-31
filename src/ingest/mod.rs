@@ -140,6 +140,38 @@ fn ingest_candidate(
     Ok(Step::Next)
 }
 
+/// Read a scanned source's bytes for the produce step, mapping transient
+/// per-file IO races to skips instead of run-fatal errors (defect-audit
+/// 20260831023057-8ecdc8ca c3). A file that vanished or became unreadable,
+/// grew past the size limit, or changed between scan and read is skipped;
+/// the next ensure re-attempts it.
+enum SourceRead {
+    Bytes(Vec<u8>),
+    Skip(String),
+}
+
+fn read_source_bytes(
+    source: &scanner::ScannedSource,
+) -> Result<SourceRead, Box<dyn std::error::Error + Send + Sync>> {
+    let bytes = match std::fs::read(&source.path) {
+        Ok(bytes) => bytes,
+        Err(error) => return Ok(SourceRead::Skip(format!("unreadable: {error}"))),
+    };
+    if bytes.len() as u64 > scanner::MAX_SOURCE_BYTES {
+        return Ok(SourceRead::Skip(
+            "grew beyond the source size limit during scan".to_string(),
+        ));
+    }
+    let read_hash = blake3::hash(&bytes).to_hex().to_string();
+    if read_hash != source.content_hash {
+        return Ok(SourceRead::Skip(format!(
+            "changed during indexing: {}",
+            source.locator
+        )));
+    }
+    Ok(SourceRead::Bytes(bytes))
+}
+
 pub fn index_repository_bounded(
     store: &mut Store,
     start: &Path,
@@ -204,12 +236,13 @@ fn index_repository_body(
     lease_owner: &str,
 ) -> Result<IndexOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let force_rebuild = repository.content_version != INDEX_FORMAT_VERSION;
-    let scanned = scanner::scan(&root)?;
+    let (scanned, scan_skipped) = scanner::scan(&root)?;
     let mut present: HashSet<String> = scanned
         .iter()
         .map(|source| source.locator.clone())
         .collect();
     let mut outcome = IndexOutcome::default();
+    outcome.skipped_sources += scan_skipped;
 
     if git::is_history_root(&root) {
         let stored_tip = metadata::git_tip::read(&repository.metadata).map(String::from);
@@ -262,7 +295,19 @@ fn index_repository_body(
             }
             let locator = harness::session_locator(&session.session_id);
             present.insert(locator.clone());
-            let bytes = std::fs::read(&session.path)?;
+            // Session files live in tmp dirs and can vanish mid-run; a read
+            // failure skips the session instead of aborting the run (c3).
+            let bytes = match std::fs::read(&session.path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    eprintln!(
+                        "warning: skipped unreadable session {}: {error}",
+                        session.session_id
+                    );
+                    outcome.skipped_sources += 1;
+                    continue;
+                }
+            };
             if bytes.len() as u64 > harness::MAX_SESSION_BYTES {
                 continue;
             }
@@ -308,27 +353,23 @@ fn index_repository_body(
             deadline,
             &mut outcome,
             |outcome| {
-                let bytes = std::fs::read(&source.path)?;
-                if bytes.len() as u64 > scanner::MAX_SOURCE_BYTES {
-                    return Err(format!(
-                        "source grew beyond size limit during scan: {}",
-                        source.locator
-                    )
-                    .into());
-                }
-                let read_hash = blake3::hash(&bytes).to_hex().to_string();
-                if read_hash != source.content_hash {
-                    return Err(
-                        format!("source changed during indexing: {}", source.locator).into(),
-                    );
-                }
-                // An undecodable source is skipped, not run-fatal (correction
-                // C4). If the source was committed earlier while still
-                // decodable, its stale committed version keeps serving: the
-                // locator stays in the scanned set, so delete_sources_not_in
-                // preserves it while the skip prevents refresh. Skips
-                // re-attempt cheaply and idempotently every run; no
-                // U+FFFD-poisoned units or fake anchors are ever committed.
+                let bytes = match read_source_bytes(source)? {
+                    SourceRead::Bytes(bytes) => bytes,
+                    SourceRead::Skip(reason) => {
+                        // The file raced the run (vanished, grew, or changed
+                        // between scan and read); skip it and keep going. If
+                        // the source was committed earlier, its stale
+                        // committed version keeps serving: the locator stays
+                        // in the scanned set, so delete_sources_not_in
+                        // preserves it while the skip prevents refresh.
+                        // Skips re-attempt cheaply and idempotently every
+                        // run; no poisoned or mixed-version units are ever
+                        // committed (correction C4 + defect-audit c3).
+                        eprintln!("warning: skipped source {}: {reason}", source.locator);
+                        outcome.skipped_sources += 1;
+                        return Ok(None);
+                    }
+                };
                 let content = match String::from_utf8(bytes) {
                     Ok(content) => content,
                     Err(_) => {
@@ -377,6 +418,18 @@ fn index_repository_body(
             outcome.embedded = embedded;
             outcome.timed_out = embeddings_timed_out;
         }
+    }
+    // A run that read nothing at all must say so loudly instead of looking
+    // like a healthy no-op (defect-audit c3).
+    if outcome.skipped_sources > 0
+        && outcome.changed_sources + outcome.unchanged_sources == 0
+        && !outcome.timed_out
+    {
+        eprintln!(
+            "warning: every readable source was skipped ({} skipped); \
+             nothing was committed this run",
+            outcome.skipped_sources
+        );
     }
     Ok(outcome)
 }
@@ -455,3 +508,6 @@ pub fn index_embeddings(
     backfill::log_event("done", serde_json::json!({"embedded": embedded}));
     Ok((embedded, false))
 }
+
+#[cfg(test)]
+mod tests;

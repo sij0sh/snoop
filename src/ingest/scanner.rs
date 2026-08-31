@@ -73,8 +73,16 @@ fn classify(path: &Path) -> Option<SourceKind> {
     }
 }
 
-pub fn scan(root: &Path) -> Result<Vec<ScannedSource>, Box<dyn std::error::Error + Send + Sync>> {
+/// Walk `root` and return `(sources, skipped)` where `skipped` counts
+/// entries that vanished, became unreadable, or raced a size/permission
+/// change mid-walk. Transient per-file IO failures are skipped with a stderr
+/// warning instead of aborting the whole index run (defect-audit
+/// 20260831023057-8ecdc8ca c3); only walk-setup errors (bad root) abort.
+pub fn scan(
+    root: &Path,
+) -> Result<(Vec<ScannedSource>, usize), Box<dyn std::error::Error + Send + Sync>> {
     let mut sources = Vec::new();
+    let mut skipped = 0_usize;
     let mut builder = ignore::WalkBuilder::new(root);
     builder
         .hidden(true)
@@ -92,7 +100,20 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedSource>, Box<dyn std::error::Error
         });
     let walker = builder.build();
     for entry in walker {
-        let entry = entry?;
+        // A vanished or unreadable entry races the walk; skip it and keep
+        // going (c3). It is picked up again on the next ensure.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                skipped += 1;
+                let path = match &error {
+                    ignore::Error::WithPath { path, .. } => path.display().to_string(),
+                    _ => "<unknown>".to_string(),
+                };
+                eprintln!("warning: skipped unreadable scan entry {path}: {error}");
+                continue;
+            }
+        };
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
@@ -111,7 +132,17 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedSource>, Box<dyn std::error::Error
         let Some(kind) = classify(entry.path()) else {
             continue;
         };
-        let metadata = entry.metadata()?;
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                skipped += 1;
+                eprintln!(
+                    "warning: skipped unreadable file {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        };
         if metadata.len() > MAX_SOURCE_BYTES {
             continue;
         }
@@ -120,7 +151,17 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedSource>, Box<dyn std::error::Error
             .ok()
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs() as i64);
-        let content_hash = hash_file(entry.path())?;
+        let content_hash = match hash_file(entry.path()) {
+            Ok(content_hash) => content_hash,
+            Err(error) => {
+                skipped += 1;
+                eprintln!(
+                    "warning: skipped unreadable file {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        };
         sources.push(ScannedSource {
             path: entry.into_path(),
             locator,
@@ -130,7 +171,7 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedSource>, Box<dyn std::error::Error
         });
     }
     sources.sort_by(|a, b| a.locator.cmp(&b.locator));
-    Ok(sources)
+    Ok((sources, skipped))
 }
 
 #[cfg(test)]
@@ -151,8 +192,10 @@ mod tests {
             "fn ignored() {}",
         )
         .unwrap();
-        let first = scan(directory.path()).unwrap();
-        let second = scan(directory.path()).unwrap();
+        let (first, first_skipped) = scan(directory.path()).unwrap();
+        let (second, second_skipped) = scan(directory.path()).unwrap();
+        assert_eq!(first_skipped, 0);
+        assert_eq!(second_skipped, 0);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].locator, second[0].locator);
         assert_eq!(first[0].content_hash, second[0].content_hash);

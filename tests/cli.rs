@@ -438,3 +438,126 @@ fn cli_index_accepts_canonical_equivalent_paths() {
         "the same canonical root is a no-op reindex"
     );
 }
+
+#[test]
+fn unreadable_file_skips_and_indexes_the_rest() {
+    // Defect-audit c3: a chmod-000 file (vanished/unreadable class) must
+    // never abort the run; the rest of the repo still indexes.
+    let directory = tempfile::tempdir().unwrap();
+    let repo = directory.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("good.txt"), "readable content for indexing\n").unwrap();
+    let locked = repo.join("secret.txt");
+    std::fs::write(&locked, "unreadable content\n").unwrap();
+    let mut permissions = std::fs::metadata(&locked).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    permissions.set_mode(0o000);
+    std::fs::set_permissions(&locked, permissions).unwrap();
+    let db = directory.path().join("c3.db");
+    let binary = env!("CARGO_BIN_EXE_snoop");
+
+    let output = Command::new(binary)
+        .args([
+            "ensure",
+            repo.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .env("SNOOP_EMBED_URL", "mock")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an unreadable file must not abort the run: {stderr}"
+    );
+    assert!(
+        stderr.contains("secret.txt"),
+        "the warning must name the locator: {stderr}"
+    );
+    let outcome: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        outcome["outcome"]["skipped_sources"], 1,
+        "the skip must be counted: {outcome}"
+    );
+    assert_eq!(
+        outcome["outcome"]["changed_sources"], 1,
+        "the readable source is still indexed: {outcome}"
+    );
+}
+
+#[test]
+fn unreadable_directory_skips_and_all_skipped_run_warns_loudly() {
+    // Defect-audit c3: an unreadable directory races the walk (entry-level
+    // error), and a run that could not read anything must say so loudly.
+    let directory = tempfile::tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_snoop");
+
+    // Unreadable directory beside a readable file: the run still succeeds.
+    let repo = directory.path().join("partial");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("good.txt"), "readable content\n").unwrap();
+    let locked_dir = repo.join("vault");
+    std::fs::create_dir(&locked_dir).unwrap();
+    std::fs::write(locked_dir.join("hidden.txt"), "hidden\n").unwrap();
+    let mut permissions = std::fs::metadata(&locked_dir).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    permissions.set_mode(0o000);
+    std::fs::set_permissions(&locked_dir, permissions).unwrap();
+
+    let output = Command::new(binary)
+        .args([
+            "ensure",
+            repo.to_str().unwrap(),
+            "--db",
+            directory.path().join("partial.db").to_str().unwrap(),
+        ])
+        .env("SNOOP_EMBED_URL", "mock")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an unreadable directory must not abort the run: {stderr}"
+    );
+    let outcome: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        outcome["outcome"]["skipped_sources"]
+            .as_u64()
+            .is_some_and(|n| n >= 1),
+        "the unreadable directory must be counted as skipped: {outcome}"
+    );
+    assert_eq!(
+        outcome["outcome"]["changed_sources"], 1,
+        "good.txt still indexes"
+    );
+
+    // A repo where everything is unreadable: exit 0, but loud on stderr.
+    let only = directory.path().join("only");
+    std::fs::create_dir(&only).unwrap();
+    let locked = only.join("all.txt");
+    std::fs::write(&locked, "unreadable\n").unwrap();
+    let mut permissions = std::fs::metadata(&locked).unwrap().permissions();
+    permissions.set_mode(0o000);
+    std::fs::set_permissions(&locked, permissions).unwrap();
+
+    let output = Command::new(binary)
+        .args([
+            "ensure",
+            only.to_str().unwrap(),
+            "--db",
+            directory.path().join("only.db").to_str().unwrap(),
+        ])
+        .env("SNOOP_EMBED_URL", "mock")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "an all-skipped run must stay fail-soft: {stderr}"
+    );
+    assert!(
+        stderr.contains("nothing was committed"),
+        "an all-skipped run must warn loudly: {stderr}"
+    );
+}
