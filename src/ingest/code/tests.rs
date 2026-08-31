@@ -461,7 +461,9 @@ fn line_cursor_scans_each_prefix_byte_at_most_twice() {
     let build = |g: usize| {
         let mut source = String::new();
         for i in 0..g {
-            source.push_str(&format!("fn flat_{i}() {{\n    let _ = {i};\n    let _ = {i};\n}}\n\n"));
+            source.push_str(&format!(
+                "fn flat_{i}() {{\n    let _ = {i};\n    let _ = {i};\n}}\n\n"
+            ));
         }
         source
     };

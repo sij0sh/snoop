@@ -466,8 +466,7 @@ pub(super) fn parse_pi_episodes(content: &str) -> Vec<EpisodeTurn> {
                         if let Some(&index) = call_event_index.get(call_id) {
                             let call = &mut turn.events[index];
                             if call.kind == EventKind::ToolCall && call.id == call_id {
-                                call.outcome =
-                                    bash_outcome_from_content(&message.content, command);
+                                call.outcome = bash_outcome_from_content(&message.content, command);
                             }
                         }
                     }

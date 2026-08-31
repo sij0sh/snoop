@@ -9,8 +9,8 @@ fn normalized(relative: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join(relative);
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {relative}: {error}"));
     content.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

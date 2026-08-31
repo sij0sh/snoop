@@ -336,8 +336,12 @@ fn rename_index_collapses_pairwise_body_work() {
         let mut before = String::new();
         let mut after = String::new();
         for i in 0..g {
-            before.push_str(&format!("fn sym_{i}() {{\n    step_{i}_a();\n    step_{i}_b();\n}}\n\n"));
-            after.push_str(&format!("fn renamed_{i}() {{\n    step_{i}_a();\n    step_{i}_b();\n}}\n\n"));
+            before.push_str(&format!(
+                "fn sym_{i}() {{\n    step_{i}_a();\n    step_{i}_b();\n}}\n\n"
+            ));
+            after.push_str(&format!(
+                "fn renamed_{i}() {{\n    step_{i}_a();\n    step_{i}_b();\n}}\n\n"
+            ));
         }
         let old_count = before.lines().count() as u32;
         let new_count = after.lines().count() as u32;
@@ -462,6 +466,12 @@ fn spawn_count_is_flat_in_files_per_commit() {
     };
     let small = run(4);
     let large = run(32);
-    assert_eq!(small, large, "spawn count must not grow with files per commit");
-    assert!(large <= 8, "expected <= 8 spawns for one commit, got {large}");
+    assert_eq!(
+        small, large,
+        "spawn count must not grow with files per commit"
+    );
+    assert!(
+        large <= 8,
+        "expected <= 8 spawns for one commit, got {large}"
+    );
 }

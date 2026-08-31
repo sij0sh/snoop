@@ -245,7 +245,9 @@ fn parallel_bash_results_attach_without_rescan() {
             .as_ref()
             .unwrap_or_else(|| panic!("result for {} must attach without a scan", call.id));
         let debug = format!("{outcome:?}");
-        assert!(debug.contains("failed") && debug.contains("Some(7)"),
-            "outcome must upgrade from the structured result: {debug}");
+        assert!(
+            debug.contains("failed") && debug.contains("Some(7)"),
+            "outcome must upgrade from the structured result: {debug}"
+        );
     }
 }

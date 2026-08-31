@@ -85,7 +85,8 @@ pub fn log_event(event: &str, fields: serde_json::Value) {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_secs())
         .unwrap_or(0);
-    let mut record = serde_json::json!({"ts": timestamp, "event": event, "pid": std::process::id()});
+    let mut record =
+        serde_json::json!({"ts": timestamp, "event": event, "pid": std::process::id()});
     if let (Some(target), Some(extra)) = (record.as_object_mut(), fields.as_object()) {
         for (key, value) in extra {
             target.insert(key.clone(), value.clone());
@@ -107,13 +108,14 @@ pub fn log_event(event: &str, fields: serde_json::Value) {
 pub fn acquire_backfill_lock(
     deadline: Option<Instant>,
 ) -> Result<BackfillGuard, Box<dyn Error + Send + Sync>> {
-    let disabled = std::env::var_os("SNOOP_EMBED_BACKFILL_LOCK")
-        .is_some_and(|value| value == "0")
+    let disabled = std::env::var_os("SNOOP_EMBED_BACKFILL_LOCK").is_some_and(|value| value == "0")
         || state_dir().is_none();
     if disabled {
         return Ok(BackfillGuard { _file: None });
     }
-    let path = state_dir().expect("checked above").join("embed-backfill.lock");
+    let path = state_dir()
+        .expect("checked above")
+        .join("embed-backfill.lock");
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -251,7 +253,10 @@ mod tests {
     fn renews_lease_before_each_retry_attempt() {
         // c2: attempt 1 is covered by the caller's chunk-boundary renewal;
         // every retry attempt must re-arm the lease first.
-        let embedder = FlakyEmbedder { calls: AtomicUsize::new(0), transient_failures: 1 };
+        let embedder = FlakyEmbedder {
+            calls: AtomicUsize::new(0),
+            transient_failures: 1,
+        };
         let renewals = AtomicUsize::new(0);
         let vectors = embed_batch_bounded(&embedder, &texts(), None, || {
             renewals.fetch_add(1, Ordering::SeqCst);
@@ -265,7 +270,10 @@ mod tests {
 
     #[test]
     fn first_attempt_success_never_renews() {
-        let embedder = FlakyEmbedder { calls: AtomicUsize::new(0), transient_failures: 0 };
+        let embedder = FlakyEmbedder {
+            calls: AtomicUsize::new(0),
+            transient_failures: 0,
+        };
         let renewals = AtomicUsize::new(0);
         let vectors = embed_batch_bounded(&embedder, &texts(), None, || {
             renewals.fetch_add(1, Ordering::SeqCst);
@@ -281,7 +289,10 @@ mod tests {
     fn lost_lease_aborts_before_the_retry() {
         // The lease was stolen during backoff: renewal reports false and no
         // second embed call may happen.
-        let embedder = FlakyEmbedder { calls: AtomicUsize::new(0), transient_failures: 1 };
+        let embedder = FlakyEmbedder {
+            calls: AtomicUsize::new(0),
+            transient_failures: 1,
+        };
         let error = embed_batch_bounded(&embedder, &texts(), None, || Ok(false)).unwrap_err();
         assert!(error.is::<LeaseLost>(), "expected LeaseLost, got {error}");
         assert_eq!(embedder.calls.load(Ordering::SeqCst), 1);
@@ -290,7 +301,10 @@ mod tests {
     #[test]
     fn renewal_errors_fail_the_batch() {
         // A broken lease store is a run failure, not a retryable embed error.
-        let embedder = FlakyEmbedder { calls: AtomicUsize::new(0), transient_failures: 1 };
+        let embedder = FlakyEmbedder {
+            calls: AtomicUsize::new(0),
+            transient_failures: 1,
+        };
         let error =
             embed_batch_bounded(&embedder, &texts(), None, || Err("lease db offline".into()))
                 .unwrap_err();

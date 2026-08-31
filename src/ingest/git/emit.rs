@@ -275,7 +275,8 @@ pub fn ingest_commit(
             let after = if file.status == 'D' {
                 String::new()
             } else {
-                blobs.read(&commit.oid, &file.path)
+                blobs
+                    .read(&commit.oid, &file.path)
                     .filter(|content| content.len() <= MAX_ALIGN_BYTES)
                     .unwrap_or_default()
             };

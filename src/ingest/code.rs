@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::ops::{Range, RangeInclusive};
 
-use tree_sitter::{Node, Parser};
 use std::cell::Cell;
+use tree_sitter::{Node, Parser};
 
 // Scaling-guard counter (computational-scaling-audit 20260830195149-6f1a96a5,
 // finding 2). Invariant: bytes scanned per analyze_code <= 2 x S_f for flat
@@ -404,9 +404,7 @@ fn boundaries_from_atoms(path: &str, source: &str, atoms: &[ParsedAtom]) -> Vec<
                 parent_symbol_id,
                 byte_range: atom.start_offset..atom.end_offset,
                 line_range: cursor.line_of(atom.start_offset)
-                    ..=cursor.line_of(
-                        atom.end_offset.saturating_sub(1).max(atom.start_offset),
-                    ),
+                    ..=cursor.line_of(atom.end_offset.saturating_sub(1).max(atom.start_offset)),
                 leading_context,
                 references: record.map(|record| record.references).unwrap_or_default(),
                 safe_split_points: crate::metadata::chunk_segments::read(&atom.metadata)

@@ -243,10 +243,7 @@ impl BlobReader {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|error| format!("git cat-file spawn failed: {error}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or("git cat-file stdin unavailable")?;
+        let stdin = child.stdin.take().ok_or("git cat-file stdin unavailable")?;
         let stdout = child
             .stdout
             .take()
