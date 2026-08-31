@@ -22,30 +22,30 @@ fn git(root: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
-const AUTH_V1: &str = "pub fn refresh_session() {\n    validate();\n}\n\nfn validate() {\n    true\n}\n\nfn rotate() {\n    rotate_key();\n}\n";
-const AUTH_V2: &str =
+const AUTH_SEED: &str = "pub fn refresh_session() {\n    validate();\n}\n\nfn validate() {\n    true\n}\n\nfn rotate() {\n    rotate_key();\n}\n";
+const AUTH_PRUNED: &str =
     "pub fn refresh_session() {\n    validate();\n}\n\nfn validate() {\n    true\n}\n";
-const AUTH_V3: &str =
+const AUTH_VERIFIED: &str =
     "pub fn refresh_session() {\n    verify_session();\n}\n\nfn verify_session() {\n    true\n}\n";
 
-const STORE_V1: &str = "void Store::flush() {\n    sync();\n}\n";
-const STORE_V2: &str = "void Store::flush() {\n    verify();\n}\n";
+const STORE_SYNC: &str = "void Store::flush() {\n    sync();\n}\n";
+const STORE_VERIFY: &str = "void Store::flush() {\n    verify();\n}\n";
 
-const WORKER_V1: &str = "namespace Acme;\n\npublic class Worker\n{\n    public void drain_queue()\n    {\n        poll();\n    }\n}\n";
-const WORKER_V2: &str =
+const WORKER_DRAIN: &str = "namespace Acme;\n\npublic class Worker\n{\n    public void drain_queue()\n    {\n        poll();\n    }\n}\n";
+const WORKER_VERIFY: &str =
     "namespace Acme;\n\npublic class Worker\n{\n    public void drain_queue()\n    {\n        verify();\n    }\n}\n";
 
-const GEOM_V1: &str = "double scale_vector(double v, double s) {\n    return v * s;\n}\n";
-const GEOM_V2: &str = "double scale_vector(double v, double s) {\n    return v * s * 2.0;\n}\n";
+const GEOM_PLAIN: &str = "double scale_vector(double v, double s) {\n    return v * s;\n}\n";
+const GEOM_SCALED: &str = "double scale_vector(double v, double s) {\n    return v * s * 2.0;\n}\n";
 
 fn alignment_repo(root: &Path) {
     std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(root.join("src/auth.rs"), AUTH_V1).unwrap();
+    std::fs::write(root.join("src/auth.rs"), AUTH_SEED).unwrap();
     std::fs::write(root.join("src/tool.py"), "def load():\n    return 1\n").unwrap();
     std::fs::write(root.join("notes.txt"), "note one\n").unwrap();
-    std::fs::write(root.join("src/store.cpp"), STORE_V1).unwrap();
-    std::fs::write(root.join("src/worker.cs"), WORKER_V1).unwrap();
-    std::fs::write(root.join("src/geom.c"), GEOM_V1).unwrap();
+    std::fs::write(root.join("src/store.cpp"), STORE_SYNC).unwrap();
+    std::fs::write(root.join("src/worker.cs"), WORKER_DRAIN).unwrap();
+    std::fs::write(root.join("src/geom.c"), GEOM_PLAIN).unwrap();
     git(root, &["init", "--quiet"]);
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "seed"]);
@@ -58,29 +58,29 @@ fn alignment_repo(root: &Path) {
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "grow load"]);
 
-    std::fs::write(root.join("src/store.cpp"), STORE_V2).unwrap();
+    std::fs::write(root.join("src/store.cpp"), STORE_VERIFY).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "rework flush body"]);
 
-    std::fs::write(root.join("src/worker.cs"), WORKER_V2).unwrap();
+    std::fs::write(root.join("src/worker.cs"), WORKER_VERIFY).unwrap();
     git(root, &["add", "."]);
     git(
         root,
         &["commit", "--quiet", "-m", "rework drain_queue body"],
     );
 
-    std::fs::write(root.join("src/geom.c"), GEOM_V2).unwrap();
+    std::fs::write(root.join("src/geom.c"), GEOM_SCALED).unwrap();
     git(root, &["add", "."]);
     git(
         root,
         &["commit", "--quiet", "-m", "rework scale_vector body"],
     );
 
-    std::fs::write(root.join("src/auth.rs"), AUTH_V2).unwrap();
+    std::fs::write(root.join("src/auth.rs"), AUTH_PRUNED).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "drop rotate"]);
 
-    std::fs::write(root.join("src/auth.rs"), AUTH_V3).unwrap();
+    std::fs::write(root.join("src/auth.rs"), AUTH_VERIFIED).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "--quiet", "-m", "clarify validate"]);
 
