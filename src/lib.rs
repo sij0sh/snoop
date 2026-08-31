@@ -1,6 +1,7 @@
 pub mod core;
 pub mod inference;
 pub mod ingest;
+pub mod install;
 pub mod mcp;
 pub(crate) mod metadata;
 pub mod runtime;

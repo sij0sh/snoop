@@ -75,6 +75,14 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
     },
+    Install(snoop::install::InstallOptions),
+    /// Run the installed llama.cpp embedding server in the foreground.
+    Embed {
+        #[arg(long, value_name = "PORT")]
+        /// Port for the embedding server to listen on.
+        #[arg(long, value_name = "PORT")]
+        port: Option<u16>,
+    },
 }
 
 fn db_path(
@@ -106,16 +114,21 @@ fn bound_repository(store: &Store) -> Result<Repository, Box<dyn std::error::Err
 }
 
 fn embedder() -> Option<Box<dyn Embedder>> {
-    let Ok(url) = std::env::var("SNOOP_EMBED_URL") else {
-        return None;
+    // SNOOP_EMBED_URL wins when set; otherwise fall back to the config
+    // written by `snoop install embedder`.
+    let (url, version) = match std::env::var("SNOOP_EMBED_URL") {
+        Ok(url) => {
+            let version = std::env::var("SNOOP_EMBED_VERSION")
+                .unwrap_or_else(|_| "Qwen3-Embedding-0.6B-Q8_0".to_string());
+            (url, version)
+        }
+        Err(_) => snoop::install::file_embed_config()?,
     };
     if url == "mock" {
         Some(Box::new(MockEmbedder::new(
             snoop::inference::MOCK_MODEL_VERSION,
         )))
     } else {
-        let version = std::env::var("SNOOP_EMBED_VERSION")
-            .unwrap_or_else(|_| "Qwen3-Embedding-0.6B-Q8_0".to_string());
         Some(Box::new(LlamaServerEmbedder::new(&url, &version)))
     }
 }
@@ -456,6 +469,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 },
                 std::io::stdout().lock(),
             )?;
+        }
+        Command::Install(options) => {
+            snoop::install::run_install(options)?;
+        }
+        Command::Embed { port } => {
+            snoop::install::embed::run_embed(port)?;
         }
     }
     Ok(())
