@@ -2,7 +2,7 @@ mod anchors;
 #[cfg(test)]
 mod leases;
 #[cfg(test)]
-mod migration_tests;
+mod open_tests;
 mod queries;
 mod records;
 mod rows;
@@ -34,7 +34,7 @@ use vec::register_sqlite_vec;
 #[derive(Debug)]
 pub enum StoreOpenError {
     Sqlite(rusqlite::Error),
-    MultipleRepositories { repositories: i64 },
+    UnsupportedFormat { version: i64 },
     RootMismatch { bound: String, requested: String },
 }
 
@@ -42,10 +42,10 @@ impl std::fmt::Display for StoreOpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Sqlite(error) => write!(f, "{error}"),
-            Self::MultipleRepositories { repositories } => write!(
+            Self::UnsupportedFormat { version } => write!(
                 f,
-                "database holds {repositories} repositories; snoop keeps one repository \
-                 per database — create one database per repository and reindex"
+                "database format {version} is not supported by this snoop build; \
+                 delete the database and index the repository again"
             ),
             Self::RootMismatch { bound, requested } => write!(
                 f,

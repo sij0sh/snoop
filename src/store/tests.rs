@@ -37,7 +37,7 @@ fn commit_units(store: &mut Store, locator: &str, units: &[BuiltUnit]) -> Commit
 }
 
 #[test]
-fn migrations_are_idempotent_and_vec_loads() {
+fn migrate_is_idempotent_and_vec_loads() {
     let store = Store::open_in_memory().unwrap();
     migrate(store.connection()).unwrap();
     let vec_version: String = store
@@ -58,7 +58,7 @@ fn migrations_are_idempotent_and_vec_loads() {
 }
 
 #[test]
-fn fresh_databases_skip_the_version_one_schema() {
+fn fresh_databases_create_the_current_schema() {
     let store = Store::open_in_memory().unwrap();
     let has_table = |name: &str| -> bool {
         store
@@ -80,119 +80,6 @@ fn fresh_databases_skip_the_version_one_schema() {
     assert!(!has_table("symbols"));
     assert!(!has_table("commits"));
     assert!(!has_table("sessions"));
-}
-
-/// Builds a minimal version-1 database with only the tables MIGRATION_V2
-/// touches, then asserts the fold into unified anchors preserves everything.
-#[test]
-fn version_one_databases_migrate_to_unified_anchors() {
-    let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        r#"
-        CREATE TABLE repositories (id INTEGER PRIMARY KEY, root_path TEXT NOT NULL UNIQUE,
-            content_version TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}');
-        CREATE TABLE sources (id INTEGER PRIMARY KEY,
-            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL, locator TEXT NOT NULL, content_hash TEXT NOT NULL,
-            modified_at INTEGER, metadata TEXT NOT NULL DEFAULT '{}', UNIQUE(repo_id, locator));
-        CREATE TABLE retrieval_units (id INTEGER PRIMARY KEY,
-            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL, evidence_text TEXT NOT NULL, routing_text TEXT NOT NULL,
-            token_count INTEGER NOT NULL, content_hash TEXT NOT NULL,
-            metadata TEXT NOT NULL DEFAULT '{}',
-            created_at INTEGER NOT NULL DEFAULT (unixepoch()), timestamp INTEGER);
-        CREATE TABLE atoms (id INTEGER PRIMARY KEY,
-            source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-            content_hash TEXT NOT NULL);
-        CREATE TABLE retrieval_unit_atoms (
-            unit_id INTEGER NOT NULL REFERENCES retrieval_units(id) ON DELETE CASCADE,
-            atom_id INTEGER NOT NULL REFERENCES atoms(id) ON DELETE CASCADE,
-            PRIMARY KEY (unit_id, atom_id));
-        CREATE TABLE files (id INTEGER PRIMARY KEY,
-            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            path TEXT NOT NULL, UNIQUE(repo_id, path));
-        CREATE TABLE symbols (id INTEGER PRIMARY KEY,
-            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            name TEXT NOT NULL, UNIQUE(repo_id, name));
-        CREATE TABLE commits (id INTEGER PRIMARY KEY,
-            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            oid TEXT NOT NULL, UNIQUE(repo_id, oid));
-        CREATE TABLE sessions (id INTEGER PRIMARY KEY,
-            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            session_id TEXT NOT NULL, UNIQUE(repo_id, session_id));
-        CREATE TABLE unit_anchors (
-            unit_id INTEGER NOT NULL REFERENCES retrieval_units(id) ON DELETE CASCADE,
-            anchor_kind TEXT NOT NULL, anchor_id INTEGER NOT NULL,
-            relationship TEXT NOT NULL, confidence_source TEXT NOT NULL,
-            PRIMARY KEY (unit_id, anchor_kind, anchor_id, relationship));
-        CREATE TABLE vectors (unit_id INTEGER NOT NULL REFERENCES retrieval_units(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL, model_version TEXT NOT NULL, dimensions INTEGER NOT NULL,
-            vector BLOB NOT NULL, PRIMARY KEY(unit_id, kind, model_version));
-        CREATE TABLE index_runs (id INTEGER PRIMARY KEY,
-            repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL,
-            changed_sources INTEGER NOT NULL, unchanged_sources INTEGER NOT NULL,
-            deleted_sources INTEGER NOT NULL, units_added INTEGER NOT NULL,
-            units_reused INTEGER NOT NULL, units_removed INTEGER NOT NULL,
-            embedded INTEGER NOT NULL, status TEXT NOT NULL,
-            duration_ms INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE index_leases (repo_id INTEGER PRIMARY KEY,
-            owner TEXT NOT NULL, expires_at INTEGER NOT NULL);
-        INSERT INTO repositories(id, root_path) VALUES (1, '/repo');
-        INSERT INTO sources(id, repo_id, kind, locator, content_hash)
-            VALUES (10, 1, 'code', 'src/main.rs', 'h');
-        INSERT INTO retrieval_units(id, repo_id, source_id, kind, evidence_text,
-            routing_text, token_count, content_hash)
-            VALUES (100, 1, 10, 'code', 'evidence', 'routing', 3, 'unit-hash');
-        INSERT INTO files(id, repo_id, path) VALUES (7, 1, 'src/main.rs');
-        INSERT INTO symbols(id, repo_id, name) VALUES (8, 1, 'login');
-        INSERT INTO commits(id, repo_id, oid) VALUES (9, 1, 'abc123');
-        INSERT INTO sessions(id, repo_id, session_id) VALUES (11, 1, 'pi-session:x');
-        INSERT INTO atoms(id, source_id, content_hash) VALUES (50, 10, 'atom-hash');
-        INSERT INTO retrieval_unit_atoms(unit_id, atom_id) VALUES (100, 50);
-        INSERT INTO unit_anchors VALUES (100, 'file', 7, 'touched', 'deterministic');
-        INSERT INTO unit_anchors VALUES (100, 'symbol', 8, 'defines', 'deterministic');
-        INSERT INTO unit_anchors VALUES (100, 'commit', 9, 'introduced_by', 'deterministic');
-        INSERT INTO unit_anchors VALUES (100, 'session', 11, 'part_of', 'deterministic');
-        PRAGMA user_version = 1;
-        "#,
-    )
-    .unwrap();
-
-    migrate(&conn).unwrap();
-
-    let version: i64 = conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(version, 3);
-    // Unit ids survive the migration untouched.
-    let unit_id: i64 = conn
-        .query_row("SELECT id FROM retrieval_units", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(unit_id, 100);
-
-    let anchors: Vec<(String, String, String)> = {
-        let mut statement = conn
-            .prepare(
-                "SELECT kind, value, relationship FROM unit_anchors ua
-                      JOIN anchors a ON a.id=ua.anchor_id ORDER BY kind",
-            )
-            .unwrap();
-        let rows = statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .unwrap();
-        rows.map(|row| row.unwrap()).collect()
-    };
-    assert_eq!(
-        anchors,
-        vec![
-            ("commit".into(), "abc123".into(), "introduced_by".into()),
-            ("file".into(), "src/main.rs".into(), "touched".into()),
-            ("session".into(), "pi-session:x".into(), "part_of".into()),
-            ("symbol".into(), "login".into(), "defines".into()),
-        ]
-    );
 }
 
 #[test]
@@ -404,7 +291,7 @@ fn persistent_database_reopens_with_sqlite_vec() {
 }
 
 #[test]
-fn concurrent_migration_of_a_shared_fresh_database_succeeds() {
+fn concurrent_open_of_a_shared_fresh_database_succeeds() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("race.db");
     let handles: Vec<_> = (0..4)
@@ -416,7 +303,7 @@ fn concurrent_migration_of_a_shared_fresh_database_succeeds() {
     for handle in handles {
         assert!(
             handle.join().unwrap(),
-            "concurrent Store::open must migrate without duplicate-DDL errors"
+            "concurrent Store::open must create the schema without duplicate-DDL errors"
         );
     }
     let store = Store::open(&path).unwrap();

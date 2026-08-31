@@ -2,7 +2,7 @@
 
 `snoop` is a local repository context compiler for coding agents.
 
-V1 indexes current code (Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java, C#, C, C++), Markdown, text, git history, and prior agent sessions (Pi). It stores self-contained retrieval units in SQLite. It creates deterministic evidence and routing projections. Queries run over four local channels (evidence/routing x BM25/vector) with reciprocal-rank fusion and anchor expansion. It performs no query-time generative-LLM call.
+Snoop indexes current code (Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java, C#, C, C++), Markdown, text, git history, and prior agent sessions (Pi). It stores self-contained retrieval units in SQLite. It creates deterministic evidence and routing projections. Queries run over four local channels (evidence/routing x BM25/vector) with reciprocal-rank fusion and anchor expansion. It performs no query-time generative-LLM call.
 
 ## Build and test
 
@@ -31,8 +31,8 @@ The default database is `~/.snoop/snoop.db`. Set `SNOOP_DB` or pass `--db` to ov
 
 One database holds exactly one repository. The first `snoop init`/`index`/`ensure` binds the
 database to that repository's canonical root; a second root is refused instead of silently
-sharing, and pre-existing databases migrate automatically unless they contain multiple
-repositories (create one database per repository and reindex).
+sharing. A database in any other on-disk format is refused too: delete it and index the
+repository again.
 
 Queries emit lean packets: each item carries only source kind, locator, evidence text, and timestamp. `snoop query --explain` additionally prints selection diagnostics to stderr (selected unit IDs, source slices, resolved anchors, selection reasons, channel and fused rankings, anchor-expansion decisions). `max_tokens` is an evidence budget: the sum of admitted evidence never exceeds it.
 
@@ -124,7 +124,7 @@ Notifications produce no response. Unknown methods return JSON-RPC `-32601` and 
 
 ## Current scope
 
-Included through V1:
+Included:
 
 - gitignore-aware repository scanning.
 - Rust, Python, TypeScript/TSX, JavaScript/JSX, Go, Java, C#, C, and C++ code parsing.
