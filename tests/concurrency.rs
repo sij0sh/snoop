@@ -2,8 +2,9 @@
 //!
 //! 1. Cold-start overlap: two concurrent `ensure` runs admit exactly one indexer.
 //! 2. busy_timeout: an ensure blocked by a held write transaction waits, then succeeds.
-//! 3. Lease steal: an ensure takes over an expired lease row left by a gone holder.
-//! 4. Live holder past TTL: a live holder whose lease lapsed loses it.
+//! 3. Lease steal: an ensure takes over an expired lease row past the TTL,
+//!    whether its holder process is live or gone (row state is all the code
+//!    can see; pinned by `ensure_steals_a_live_holders_expired_lease`).
 //!
 //! Within the TTL an ensure reports `locked` (pinned by
 //! `cli_ensure_reports_locked_under_a_held_lease` in tests/cli.rs), so the
@@ -193,34 +194,6 @@ fn ensure_waits_out_a_held_write_transaction_then_succeeds() {
     assert_eq!(
         report["status"], "up-to-date",
         "the waited-out run committed"
-    );
-}
-
-#[test]
-fn ensure_steals_an_expired_lease_row() {
-    let directory = tempfile::tempdir().unwrap();
-    let repo = directory.path().join("repo");
-    write_repo(&repo, 2);
-    let db = directory.path().join("index.db");
-    let binary = env!("CARGO_BIN_EXE_snoop");
-
-    let root = scanner::repository_root(&repo)
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    {
-        let store = Store::open(&db).unwrap();
-        let repository = store.bind_repository(&root).unwrap();
-        assert!(store.acquire_lease("blocker", 1).unwrap());
-    } // holder is gone; only the expired lease row remains
-
-    std::thread::sleep(EXPIRY_SLEEP);
-
-    let (status, report) = run_ensure(binary, &repo, &db);
-    assert!(status.success(), "{report}");
-    assert_eq!(
-        report["status"], "refreshed",
-        "ensure steals an expired lease and does the work"
     );
 }
 

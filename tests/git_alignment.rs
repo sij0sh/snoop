@@ -144,21 +144,6 @@ fn indexed_changes(directory: &tempfile::TempDir) -> Vec<Change> {
 }
 
 #[test]
-fn python_edits_align_to_python_symbols() {
-    let directory = tempfile::tempdir().unwrap();
-    alignment_repo(directory.path());
-    let changes = indexed_changes(&directory);
-    let python = changes
-        .iter()
-        .find(|change| change.path == "src/tool.py" && change.symbol_id.is_some())
-        .expect("symbol-aligned unit for the python edit");
-    assert_eq!(python.language.as_deref(), Some("python"));
-    assert_eq!(python.change_kind, "modified");
-    assert_eq!(python.symbol_id.as_deref(), Some("src/tool.py > load"));
-    assert!(python.evidence.contains("total = 1"));
-}
-
-#[test]
 fn cpp_edits_align_to_qualified_methods() {
     let directory = tempfile::tempdir().unwrap();
     alignment_repo(directory.path());
@@ -297,10 +282,14 @@ fn git_symbol_ids_match_code_unit_identities() {
         }
     }
     let changes = git_changes(&store);
-    let git_identity = changes
+    let git_change = changes
         .iter()
         .find(|change| change.symbol_id.as_deref() == Some("src/tool.py > load"))
-        .and_then(|change| change.symbol_id.clone());
+        .expect("symbol-aligned git unit for the python edit");
+    assert_eq!(git_change.language.as_deref(), Some("python"));
+    assert_eq!(git_change.change_kind, "modified");
+    assert!(git_change.evidence.contains("total = 1"));
+    let git_identity = git_change.symbol_id.clone();
     assert_eq!(code_identity, git_identity);
 }
 

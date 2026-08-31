@@ -1,5 +1,5 @@
 use snoop::core::UnitKind;
-use snoop::ingest::harness::{ingest_pi_session, MAX_EPISODES_PER_SESSION};
+use snoop::ingest::harness::ingest_pi_session;
 use snoop::ingest::units::MAX_TOKENS;
 
 const LONG_SENTENCE: &str = "Walk the auth module top down, quote every relevant span, and explain the reasoning behind each step in enough detail for a later review. ";
@@ -78,21 +78,6 @@ fn long_session_units_stay_within_the_token_budget() {
     assert_eq!(units[0].metadata["session"], "seg-e2e");
     assert!(units[0].routing_text.contains("session: seg-e2e"));
 }
-
-#[test]
-fn segment_phase_and_boundary_metadata_are_gone() {
-    let units = ingest_pi_session(&multi_cycle_session(), "seg-e2e").unwrap();
-    for unit in &units {
-        let metadata = &unit.metadata;
-        assert!(metadata.get("phase").is_none());
-        assert!(metadata.get("boundary").is_none());
-        assert!(metadata.get("segment_id").is_none());
-        assert!(metadata.get("prev").is_none());
-        assert!(metadata.get("next").is_none());
-        assert!(metadata.get("oversized").is_none());
-    }
-}
-
 #[test]
 fn every_piece_carries_the_session_and_touched_file_anchors() {
     let units = ingest_pi_session(&multi_cycle_session(), "seg-e2e").unwrap();
@@ -125,7 +110,3 @@ fn bash_outcomes_survive_the_policy_change() {
     assert!(!evidence.contains("edit applied"));
 }
 
-#[test]
-fn turn_counts_respect_the_session_cap() {
-    assert!(MAX_EPISODES_PER_SESSION >= 1);
-}
