@@ -109,4 +109,3 @@ fn bash_outcomes_survive_the_policy_change() {
     assert!(!evidence.contains("three matching call sites"));
     assert!(!evidence.contains("edit applied"));
 }
-
