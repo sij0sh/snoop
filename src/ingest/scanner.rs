@@ -178,12 +178,18 @@ pub fn scan(
 /// The cheatcodes knowledge corpus is machine-local agent state that is
 /// typically hidden and gitignored; scan it explicitly when present so the
 /// conditional chunker (ingest::cheatcodes) can index it.
+///
+/// Single owner of the corpus locator: the ingest router keys the entry
+/// chunker on this constant, so content sniffing never decides routing
+/// (defect-audit 20260901192001-22ddf0a5).
+pub const CHEATCODES_LOCATOR: &str = ".agents/CHEATCODES.md";
+
 fn force_scan_cheatcodes(root: &Path, sources: &mut Vec<ScannedSource>, skipped: &mut usize) {
     let path = root.join(".agents").join("CHEATCODES.md");
     if !path.is_file() {
         return;
     }
-    let locator = ".agents/CHEATCODES.md";
+    let locator = CHEATCODES_LOCATOR;
     if sources
         .iter()
         .any(|source| source.locator == locator)

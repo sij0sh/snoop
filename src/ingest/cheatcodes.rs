@@ -36,8 +36,9 @@ pub fn entry_chunks(src: &str) -> Vec<(usize, &str)> {
     chunks
 }
 
-/// Markdown units, chunked per cheatcodes entry when the content is a
-/// cheatcodes corpus, else the standard heading-section strategy. Chunks
+/// Chunker for the cheatcodes corpus locator; the ingest router calls this
+/// only for `.agents/CHEATCODES.md`, so quoted markers in other markdown
+/// never reach it and keep the standard heading-section strategy. Chunks
 /// build units independently, so units never merge across entry
 /// boundaries; offsets shift back onto the original file so source_slices
 /// stay valid.

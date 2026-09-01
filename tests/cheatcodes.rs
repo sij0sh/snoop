@@ -111,3 +111,71 @@ fn unclosed_final_entry_is_captured_to_end_of_file() {
     assert!(units[0].evidence_text.contains("CHEATCODES > Only entry"));
     assert!(units[0].evidence_text.contains("Only body."));
 }
+
+#[test]
+fn quoted_marker_in_other_markdown_keeps_heading_sections() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("quoted.md"),
+        "# Guide\n\n\
+         A fenced example shows the marker:\n\n\
+         ```\n\
+         <!-- cheatcodes-entry {\"id\":\"demo\"}-->\n\
+         ## Demo entry\n\n\
+         Demo body.\n\
+         ```\n\n\
+         ## Retrieval notes\n\n\
+         The quartz zephyr token lives here.\n",
+    )
+    .unwrap();
+
+    let store = index(&directory);
+    let units = units_for(&store, "quoted.md");
+    let token_unit = units
+        .iter()
+        .find(|unit| unit.evidence_text.contains("quartz zephyr token"))
+        .expect("the tail section must be indexed");
+    assert!(
+        token_unit.evidence_text.starts_with("quoted > Guide > Retrieval notes"),
+        "the tail must be served under its real heading: {}",
+        token_unit.evidence_text
+    );
+    assert!(
+        !token_unit.evidence_text.contains("## Retrieval notes"),
+        "the real heading must be parsed, not swallowed as raw text"
+    );
+    assert!(
+        units
+            .iter()
+            .all(|unit| !unit.evidence_text.contains("quoted > Demo entry")),
+        "the quoted example heading must not become a breadcrumb"
+    );
+}
+
+#[test]
+fn corpus_location_still_chunks_content_that_quotes_the_marker() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(directory.path().join(".agents")).unwrap();
+    std::fs::write(directory.path().join(".gitignore"), ".agents/\n").unwrap();
+    let mut corpus_text = corpus();
+    corpus_text.push_str(
+        "# Quoting docs\n\n\
+         ```\n\
+         <!-- cheatcodes-entry {\"id\":\"quoted-example\"}-->\n\
+         ## Quoted example\n\n\
+         Body of the quoted example.\n\
+         ```\n",
+    );
+    std::fs::write(directory.path().join(".agents/CHEATCODES.md"), corpus_text).unwrap();
+
+    let store = index(&directory);
+    let units = units_for(&store, ".agents/CHEATCODES.md");
+    for heading in ["Alpha entry", "Beta entry"] {
+        assert!(
+            units
+                .iter()
+                .any(|unit| unit.evidence_text.contains(&format!("CHEATCODES > {heading}"))),
+            "entry {heading} must chunk separately at the corpus locator"
+        );
+    }
+}

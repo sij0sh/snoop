@@ -21,7 +21,7 @@ use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 /// in `crate::metadata` changes its persisted shape, so existing databases
 /// rebuild every source on the next index run instead of serving old-shape
 /// rows (see the upgrade policy in `src/metadata.rs`).
-pub const INDEX_FORMAT_VERSION: &str = "phase-15";
+pub const INDEX_FORMAT_VERSION: &str = "phase-16";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed chunk and again before
@@ -414,7 +414,19 @@ fn index_repository_body(
                     .unwrap_or_else(|| source.locator.clone());
                 let units = match source.kind {
                     SourceKind::Markdown => {
-                        cheatcodes::chunked_units(&content, &title, &source.locator)
+                        // Only the cheatcodes corpus itself is
+                        // marker-chunked: the marker substring in any other
+                        // markdown file is quoted text, not corpus structure
+                        // (defect-audit 20260901192001-22ddf0a5).
+                        if source.locator == scanner::CHEATCODES_LOCATOR {
+                            cheatcodes::chunked_units(&content, &title, &source.locator)
+                        } else {
+                            units::build_units(
+                                &markdown::parse_markdown(&content, &title).atoms,
+                                source.kind,
+                                &source.locator,
+                            )
+                        }
                     }
                     SourceKind::Text => units::build_units(
                         &text::parse_text(&content, &title),
