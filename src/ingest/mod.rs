@@ -1,4 +1,6 @@
 pub mod backfill;
+pub use backfill::index_embeddings;
+pub mod cheatcodes;
 pub mod code;
 pub mod git;
 pub mod harness;
@@ -19,7 +21,7 @@ use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 /// in `crate::metadata` changes its persisted shape, so existing databases
 /// rebuild every source on the next index run instead of serving old-shape
 /// rows (see the upgrade policy in `src/metadata.rs`).
-pub const INDEX_FORMAT_VERSION: &str = "phase-14";
+pub const INDEX_FORMAT_VERSION: &str = "phase-15";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed chunk and again before
@@ -386,15 +388,25 @@ fn index_repository_body(
                     .file_stem()
                     .map(|value| value.to_string_lossy().to_string())
                     .unwrap_or_else(|| source.locator.clone());
-                let atoms = match source.kind {
-                    SourceKind::Markdown => markdown::parse_markdown(&content, &title).atoms,
-                    SourceKind::Text => text::parse_text(&content, &title),
-                    SourceKind::Code => code::parse_code(&content, &source.locator)?,
+                let units = match source.kind {
+                    SourceKind::Markdown => {
+                        cheatcodes::chunked_units(&content, &title, &source.locator)
+                    }
+                    SourceKind::Text => units::build_units(
+                        &text::parse_text(&content, &title),
+                        source.kind,
+                        &source.locator,
+                    ),
+                    SourceKind::Code => units::build_units(
+                        &code::parse_code(&content, &source.locator)?,
+                        source.kind,
+                        &source.locator,
+                    ),
                     SourceKind::GitCommit | SourceKind::AgentSession => unreachable!(),
                 };
                 Ok(Some(Produced {
                     metadata: serde_json::json!({"path": source.locator.clone()}),
-                    units: units::build_units(&atoms, source.kind, &source.locator),
+                    units,
                 }))
             },
         )?;
@@ -432,81 +444,6 @@ fn index_repository_body(
         );
     }
     Ok(outcome)
-}
-
-pub fn index_embeddings(
-    store: &Store,
-    embedder: &dyn Embedder,
-    deadline: Option<std::time::Instant>,
-    lease_owner: &str,
-) -> Result<(usize, bool), Box<dyn std::error::Error + Send + Sync>> {
-    // Machine-wide admission (audit fix-c4): every repo's backfill contends
-    // for the same embed endpoint, so exactly one backfill per machine runs
-    // at a time. A waiter whose budget expires reports a clean timeout.
-    let _guard = match backfill::acquire_backfill_lock(deadline) {
-        Ok(guard) => Some(guard),
-        Err(error) if error.is::<backfill::BudgetExhausted>() => {
-            backfill::log_event(
-                "embed-busy",
-                serde_json::json!({"reason": "backfill lock wait exceeded budget"}),
-            );
-            return Ok((0, true));
-        }
-        Err(error) => return Err(error),
-    };
-    let mut embedded = 0;
-    for kind in ["evidence", "routing"] {
-        // Keyset pagination (audit fix-c6): hold one chunk of pending texts in
-        // memory, never the whole backlog. An earlier writer that vectorizes a
-        // unit mid-run simply removes it from a later page; unreachable under
-        // the lease, and deferred to the next ensure otherwise.
-        let mut after_id = 0;
-        loop {
-            let page = store.units_missing_vectors_page(
-                kind,
-                embedder.model_version(),
-                after_id,
-                EMBED_CHUNK_LEN,
-            )?;
-            if page.is_empty() {
-                break;
-            }
-            if deadline_passed(deadline) {
-                return Ok((embedded, true));
-            }
-            if !store.renew_lease(lease_owner, INDEX_LEASE_TTL_SECS)? {
-                return Err("index lease lost during embedding".into());
-            }
-            let texts: Vec<String> = page.iter().map(|(_, text)| text.clone()).collect();
-            let vectors = match backfill::embed_batch_bounded(embedder, &texts, deadline, || {
-                store
-                    .renew_lease(lease_owner, INDEX_LEASE_TTL_SECS)
-                    .map_err(std::convert::Into::into)
-            }) {
-                Ok(vectors) => vectors,
-                Err(error) if error.is::<backfill::BudgetExhausted>() => {
-                    return Ok((embedded, true));
-                }
-                Err(error) if error.is::<backfill::LeaseLost>() => {
-                    // The lease expired mid-batch-retry and a new holder
-                    // stole it. Abort before writing so we never race the
-                    // new holder's FK/vectors (defect-audit c2).
-                    return Err("index lease lost during embedding".into());
-                }
-                Err(error) => return Err(error),
-            };
-            if vectors.len() != page.len() {
-                return Err("embedder returned the wrong vector count".into());
-            }
-            for ((unit_id, _), vector) in page.iter().zip(vectors) {
-                store.put_vector(*unit_id, kind, embedder.model_version(), &vector)?;
-                embedded += 1;
-            }
-            after_id = page.last().expect("non-empty page").0;
-        }
-    }
-    backfill::log_event("done", serde_json::json!({"embedded": embedded}));
-    Ok((embedded, false))
 }
 
 #[cfg(test)]
