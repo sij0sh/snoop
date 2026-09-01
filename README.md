@@ -113,7 +113,6 @@ snoop ensure [PATH] --timeout 120   # Refresh safely for unattended use
 snoop query "question" --tokens 6000
 snoop inspect symbol refresh_session
 snoop inspect unit 381
-snoop history refresh_session
 snoop sessions refresh_session
 ```
 

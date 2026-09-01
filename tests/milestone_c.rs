@@ -288,13 +288,6 @@ fn full_cli_surface_works_on_the_fixture() {
     let symbols: serde_json::Value = serde_json::from_str(&inspect_symbol).unwrap();
     assert!(symbols.as_array().is_some_and(|list| !list.is_empty()));
 
-    let history = run(&["history", "refresh_session", "--db", db_arg], &env);
-    let history: serde_json::Value = serde_json::from_str(&history).unwrap();
-    assert!(
-        history.as_array().is_some_and(|list| !list.is_empty()),
-        "history returns commit evidence: {history}"
-    );
-
     let sessions = run(&["sessions", "refresh_session", "--db", db_arg], &env);
     let sessions: serde_json::Value = serde_json::from_str(&sessions).unwrap();
     assert!(

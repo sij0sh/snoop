@@ -61,11 +61,6 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
     },
-    History {
-        symbol: String,
-        #[arg(long)]
-        db: Option<PathBuf>,
-    },
     Sessions {
         symbol: String,
         #[arg(long)]
@@ -372,18 +367,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 }
                 other => return Err(format!("unknown inspect target: {other}").into()),
-            }
-        }
-        Command::History { symbol, db } => {
-            let store = open_store(&db_path(db, Path::new("."))?)?;
-            bound_repository(&store)?;
-            let (entries, more) = snoop::mcp::history_entries(&store, &symbol)?;
-            println!("{}", serde_json::to_string_pretty(&entries)?);
-            if more > 0 {
-                eprintln!(
-                    "note: +{more} more units not shown (capped at the oldest {})",
-                    snoop::store::ANCHOR_LOOKUP_LIMIT
-                );
             }
         }
         Command::Sessions { symbol, db } => {

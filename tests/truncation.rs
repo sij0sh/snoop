@@ -82,7 +82,7 @@ fn mcp_symbol_context_reports_truncation_beyond_the_display_cap() {
 }
 
 #[test]
-fn cli_history_prints_a_truncation_notice() {
+fn cli_inspect_symbol_prints_a_truncation_notice() {
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("index.db");
     {
@@ -93,7 +93,7 @@ fn cli_history_prints_a_truncation_notice() {
     }
 
     let output = Command::new(env!("CARGO_BIN_EXE_snoop"))
-        .args(["history", "big", "--db", db.to_str().unwrap()])
+        .args(["inspect", "symbol", "big", "--db", db.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
@@ -102,7 +102,7 @@ fn cli_history_prints_a_truncation_notice() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(stdout.is_array(), "history still prints a JSON array");
+    assert!(stdout.is_array(), "inspect symbol still prints a JSON array");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("more units not shown"),
