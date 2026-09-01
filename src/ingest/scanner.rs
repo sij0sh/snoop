@@ -170,13 +170,85 @@ pub fn scan(
             modified_at,
         });
     }
+    force_scan_cheatcodes(root, &mut sources, &mut skipped);
     sources.sort_by(|a, b| a.locator.cmp(&b.locator));
     Ok((sources, skipped))
+}
+
+/// The cheatcodes knowledge corpus is machine-local agent state that is
+/// typically hidden and gitignored; scan it explicitly when present so the
+/// conditional chunker (ingest::cheatcodes) can index it.
+fn force_scan_cheatcodes(root: &Path, sources: &mut Vec<ScannedSource>, skipped: &mut usize) {
+    let path = root.join(".agents").join("CHEATCODES.md");
+    if !path.is_file() {
+        return;
+    }
+    let locator = ".agents/CHEATCODES.md";
+    if sources
+        .iter()
+        .any(|source| source.locator == locator)
+    {
+        return;
+    }
+    let Ok(metadata) = path.metadata() else {
+        *skipped += 1;
+        return;
+    };
+    if metadata.len() > MAX_SOURCE_BYTES {
+        return;
+    }
+    let content_hash = match hash_file(&path) {
+        Ok(content_hash) => content_hash,
+        Err(error) => {
+            *skipped += 1;
+            eprintln!(
+                "warning: skipped unreadable file {}: {error}",
+                path.display()
+            );
+            return;
+        }
+    };
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64);
+    sources.push(ScannedSource {
+        path,
+        locator: locator.to_string(),
+        kind: SourceKind::Markdown,
+        content_hash,
+        modified_at,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scans_the_gitignored_cheatcodes_knowledge_file() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join(".gitignore"), ".agents/\n").unwrap();
+        std::fs::create_dir(directory.path().join(".agents")).unwrap();
+        std::fs::write(
+            directory.path().join(".agents/CHEATCODES.md"),
+            "<!-- cheatcodes-entry {}-->\n## One\n",
+        )
+        .unwrap();
+        std::fs::create_dir(directory.path().join(".hidden")).unwrap();
+        std::fs::write(directory.path().join(".hidden/no.md"), "ignored").unwrap();
+        let (sources, skipped) = scan(directory.path()).unwrap();
+        assert_eq!(skipped, 0);
+        let source = sources
+            .iter()
+            .find(|source| source.locator == ".agents/CHEATCODES.md")
+            .expect("cheatcodes corpus is scanned despite hidden and ignore rules");
+        assert_eq!(source.kind, SourceKind::Markdown);
+        assert!(sources
+            .iter()
+            .all(|source| source.locator != ".hidden/no.md"));
+    }
 
     #[test]
     fn scanner_is_stable_and_skips_hidden_files() {
