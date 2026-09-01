@@ -258,7 +258,8 @@ pub struct ContextItem {
     pub source_kind: SourceKind,
     pub evidence_text: String,
     pub source_locator: String,
-    pub timestamp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 /// Per-item provenance, built only for explain requests.
@@ -268,6 +269,8 @@ pub struct ItemDiagnostics {
     pub source_slices: Vec<Value>,
     pub anchors: Vec<ResolvedAnchor>,
     pub selected_because: Vec<SelectionReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

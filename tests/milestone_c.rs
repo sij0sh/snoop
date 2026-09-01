@@ -108,6 +108,7 @@ fn four_source_packet_stays_in_budget() {
             top_n: 10,
             max_tokens: 2_000,
             diagnostics: false,
+            ..QueryOptions::default()
         },
     )
     .unwrap();
@@ -159,6 +160,7 @@ fn milestone_c_resumed_work_returns_prior_episode_with_code() {
             top_n: 10,
             max_tokens: 3_000,
             diagnostics: false,
+            ..QueryOptions::default()
         },
     )
     .unwrap();

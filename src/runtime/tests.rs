@@ -121,6 +121,7 @@ fn options_all() -> QueryOptions {
         max_tokens: 6_000,
         // Debug fields are inspected by these tests.
         diagnostics: true,
+        ..QueryOptions::default()
     }
 }
 
@@ -298,4 +299,122 @@ fn required_role_admission_respects_the_budget() {
         "the next required-role candidate is admitted after the skip: {packet_ids:?}"
     );
     assert!(report.packet.token_count <= report.packet.budget);
+}
+
+#[test]
+fn packet_timestamps_are_rendered_against_injected_now() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.bind_repository("/repo").unwrap();
+    let built = code_unit("alpha timestamp", "src/time.rs", None);
+    store
+        .commit_source(SourceIngest {
+            kind: crate::core::SourceKind::Code,
+            locator: "src/time.rs",
+            content_hash: "time-source",
+            modified_at: Some(1_700_000_000),
+            metadata: serde_json::json!({}),
+            units: &[built],
+        })
+        .unwrap();
+    let options = QueryOptions {
+        now: 1_700_003_600,
+        ..options_all()
+    };
+    let report = query(&store, None, "alpha", &options).unwrap();
+    assert_eq!(report.packet.items[0].timestamp.as_deref(), Some("1h ago"));
+    assert_eq!(
+        report.debug.unwrap().items[0].timestamp,
+        Some(1_700_000_000)
+    );
+}
+
+#[test]
+fn exclusion_removes_channel_hits_and_backfills_the_limit() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.bind_repository("/repo").unwrap();
+    let ids = commit_units(
+        &mut store,
+        "src/all.rs",
+        &[
+            code_unit("alpha one", "src/all.rs", None),
+            code_unit("alpha two", "src/all.rs", None),
+            code_unit("alpha three", "src/all.rs", None),
+        ],
+    );
+    let options = QueryOptions {
+        top_n: 2,
+        max_per_source: usize::MAX,
+        exclude_unit_ids: HashSet::from([ids[0]]),
+        ..options_all()
+    };
+    let report = query(&store, None, "alpha", &options).unwrap();
+    let debug = report.debug.unwrap();
+    assert_eq!(debug.evidence_lexical.len(), 2);
+    assert!(!debug.fused.iter().any(|(id, _, _)| *id == ids[0]));
+    assert_eq!(report.packet.items.len(), 2);
+}
+
+#[test]
+fn required_role_pick_is_not_blocked_by_source_cap() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.bind_repository("/repo").unwrap();
+    commit_units(
+        &mut store,
+        "src/required.rs",
+        &[code_unit("auth implementation", "src/required.rs", None)],
+    );
+    let options = QueryOptions {
+        max_per_source: 0,
+        ..options_all()
+    };
+    let report = query(&store, None, "how does auth work", &options).unwrap();
+    assert_eq!(report.packet.items.len(), 1);
+}
+
+#[test]
+fn admission_caps_each_source_and_orders_items_by_fused_rank() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.bind_repository("/repo").unwrap();
+    let flood_units: Vec<BuiltUnit> = (0..15)
+        .map(|index| code_unit(&format!("alpha flood {index}"), "src/flood.rs", None))
+        .collect();
+    commit_units(&mut store, "src/flood.rs", &flood_units);
+    commit_units(
+        &mut store,
+        "src/other.rs",
+        &[
+            code_unit("alpha other one", "src/other.rs", None),
+            code_unit("alpha other two", "src/other.rs", None),
+        ],
+    );
+
+    let report = query(&store, None, "alpha", &options_all()).unwrap();
+    let flood_count = report
+        .packet
+        .items
+        .iter()
+        .filter(|item| item.source_locator == "src/flood.rs")
+        .count();
+    assert_eq!(flood_count, 3);
+    assert!(report
+        .packet
+        .items
+        .iter()
+        .any(|item| item.source_locator == "src/other.rs"));
+
+    let ranks: Vec<u32> = report
+        .debug
+        .unwrap()
+        .items
+        .iter()
+        .filter_map(|item| {
+            item.selected_because
+                .iter()
+                .find_map(|reason| match reason {
+                    SelectionReason::RrfRank(rank) => Some(*rank),
+                    _ => None,
+                })
+        })
+        .collect();
+    assert!(ranks.windows(2).all(|pair| pair[0] <= pair[1]), "{ranks:?}");
 }

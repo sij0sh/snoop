@@ -13,78 +13,11 @@ const ROLE_POOL: usize = 30;
 
 mod expansion;
 mod facets;
+mod options;
 
 use expansion::plan_expansion;
 use facets::{detect_facets, preferred_role, role_of_kind};
-
-#[derive(Debug, Clone, Copy)]
-pub struct QueryChannels {
-    evidence_lexical: bool,
-    evidence_vector: bool,
-    routing_lexical: bool,
-    routing_vector: bool,
-}
-
-impl QueryChannels {
-    pub const fn evidence_only() -> Self {
-        Self {
-            evidence_lexical: true,
-            evidence_vector: true,
-            routing_lexical: false,
-            routing_vector: false,
-        }
-    }
-
-    pub const fn evidence_lexical_only() -> Self {
-        Self {
-            evidence_lexical: true,
-            evidence_vector: false,
-            routing_lexical: false,
-            routing_vector: false,
-        }
-    }
-
-    pub fn for_embedder(embedder: Option<&dyn crate::inference::Embedder>) -> Self {
-        match embedder {
-            Some(_) => Self {
-                evidence_lexical: true,
-                evidence_vector: true,
-                routing_lexical: true,
-                routing_vector: true,
-            },
-            None => Self {
-                evidence_lexical: true,
-                evidence_vector: false,
-                routing_lexical: true,
-                routing_vector: false,
-            },
-        }
-    }
-
-    /// Whether any vector channel is enabled (drives the query-embed path).
-    pub fn has_vector_channels(&self) -> bool {
-        self.evidence_vector || self.routing_vector
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct QueryOptions {
-    pub channels: QueryChannels,
-    pub top_n: usize,
-    pub max_tokens: usize,
-    pub diagnostics: bool,
-}
-
-impl Default for QueryOptions {
-    fn default() -> Self {
-        Self {
-            channels: QueryChannels::for_embedder(None),
-            top_n: 25,
-            max_tokens: 6_000,
-            diagnostics: false,
-        }
-    }
-}
+pub use options::{QueryChannels, QueryOptions};
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DebugReport {
     pub evidence_lexical: Vec<(i64, f64)>,
@@ -180,13 +113,14 @@ pub fn query_with_vector(
     if (options.channels.evidence_vector || options.channels.routing_vector) && embedder.is_none() {
         return Err("vector channels require a configured embedder".into());
     }
-    let evidence_lexical = if options.channels.evidence_lexical {
-        store.fts_search("evidence_text", text, options.top_n)?
+    let channel_limit = options.top_n.saturating_add(options.exclude_unit_ids.len());
+    let mut evidence_lexical = if options.channels.evidence_lexical {
+        store.fts_search("evidence_text", text, channel_limit)?
     } else {
         Vec::new()
     };
-    let routing_lexical = if options.channels.routing_lexical {
-        store.fts_search("routing_text", text, options.top_n)?
+    let mut routing_lexical = if options.channels.routing_lexical {
+        store.fts_search("routing_text", text, channel_limit)?
     } else {
         Vec::new()
     };
@@ -198,26 +132,35 @@ pub fn query_with_vector(
     } else {
         None
     };
-    let evidence_vector = if options.channels.evidence_vector {
+    let mut evidence_vector = if options.channels.evidence_vector {
         store.top_k_cosine(
             "evidence",
             embedder.unwrap().model_version(),
             query_vector.as_deref().unwrap_or_default(),
-            options.top_n,
+            channel_limit,
         )?
     } else {
         Vec::new()
     };
-    let routing_vector = if options.channels.routing_vector {
+    let mut routing_vector = if options.channels.routing_vector {
         store.top_k_cosine(
             "routing",
             embedder.unwrap().model_version(),
             query_vector.as_deref().unwrap_or_default(),
-            options.top_n,
+            channel_limit,
         )?
     } else {
         Vec::new()
     };
+
+    for channel in [&mut evidence_lexical, &mut routing_lexical] {
+        channel.retain(|(id, _)| !options.exclude_unit_ids.contains(id));
+        channel.truncate(options.top_n);
+    }
+    for channel in [&mut evidence_vector, &mut routing_vector] {
+        channel.retain(|(id, _)| !options.exclude_unit_ids.contains(id));
+        channel.truncate(options.top_n);
+    }
 
     let evidence_lexical_ids: Vec<i64> = evidence_lexical.iter().map(|item| item.0).collect();
     let evidence_vector_ids: Vec<i64> = evidence_vector.iter().map(|item| item.0).collect();
@@ -243,7 +186,13 @@ pub fn query_with_vector(
     let mut seen_hashes: HashSet<String> = HashSet::new();
     let mut unit_cache: HashMap<i64, Option<RetrievalUnit>> = HashMap::new();
 
-    let expansion = plan_expansion(store, &fused, text, options.diagnostics)?;
+    let expansion = plan_expansion(
+        store,
+        &fused,
+        text,
+        options.diagnostics,
+        &options.exclude_unit_ids,
+    )?;
     let selection_order = expansion.selection_order;
     let expansion_debug = expansion.debug;
 
@@ -268,6 +217,7 @@ pub fn query_with_vector(
 
     let mut role_vectors: HashMap<&'static str, Vec<Vec<f32>>> = HashMap::new();
     let mut admitted: Vec<i64> = Vec::new();
+    let mut admitted_per_source: HashMap<i64, usize> = HashMap::new();
     let mut used_tokens: usize = 0;
     #[allow(clippy::too_many_arguments)]
     fn admit(
@@ -279,6 +229,7 @@ pub fn query_with_vector(
         required: bool,
         role_vectors: &mut HashMap<&'static str, Vec<Vec<f32>>>,
         admitted: &mut Vec<i64>,
+        admitted_per_source: &mut HashMap<i64, usize>,
         role_assignments: &mut HashMap<i64, (String, bool)>,
         seen_hashes: &mut HashSet<String>,
         used_tokens: &mut usize,
@@ -290,6 +241,15 @@ pub fn query_with_vector(
         let Some(unit) = cached_unit(store, unit_cache, id)? else {
             return Ok(false);
         };
+        if !required
+            && admitted_per_source
+                .get(&unit.source_id.0)
+                .copied()
+                .unwrap_or_default()
+                >= options.max_per_source
+        {
+            return Ok(false);
+        }
         if !seen_hashes.insert(unit.content_hash.clone()) {
             return Ok(false);
         }
@@ -319,6 +279,7 @@ pub fn query_with_vector(
             role_assignments.insert(id, (role.to_string(), required));
         }
         admitted.push(id);
+        *admitted_per_source.entry(unit.source_id.0).or_default() += 1;
         *used_tokens += unit.token_count;
         Ok(true)
     }
@@ -339,6 +300,7 @@ pub fn query_with_vector(
                 true,
                 &mut role_vectors,
                 &mut admitted,
+                &mut admitted_per_source,
                 &mut role_assignments,
                 &mut seen_hashes,
                 &mut used_tokens,
@@ -372,6 +334,7 @@ pub fn query_with_vector(
                 false,
                 &mut role_vectors,
                 &mut admitted,
+                &mut admitted_per_source,
                 &mut role_assignments,
                 &mut seen_hashes,
                 &mut used_tokens,
@@ -397,6 +360,7 @@ pub fn query_with_vector(
             false,
             &mut role_vectors,
             &mut admitted,
+            &mut admitted_per_source,
             &mut role_assignments,
             &mut seen_hashes,
             &mut used_tokens,
@@ -404,6 +368,12 @@ pub fn query_with_vector(
         )?;
     }
     accepted_ids.extend(admitted);
+    let selection_rank: HashMap<i64, usize> = selection_order
+        .iter()
+        .enumerate()
+        .map(|(rank, (id, _, _, _))| (*id, rank))
+        .collect();
+    accepted_ids.sort_by_key(|id| selection_rank.get(id).copied().unwrap_or(usize::MAX));
 
     let reason_map: HashMap<i64, (Option<u32>, Option<Vec<SelectionReason>>)> =
         if options.diagnostics {
@@ -423,7 +393,9 @@ pub fn query_with_vector(
             source_kind: unit.source_kind,
             evidence_text: unit.evidence_text.clone(),
             source_locator: unit.locator.clone(),
-            timestamp: unit.timestamp,
+            timestamp: unit
+                .timestamp
+                .map(|timestamp| crate::metadata::timestamp::render(timestamp, options.now)),
         });
         if !options.diagnostics {
             continue;
@@ -457,6 +429,7 @@ pub fn query_with_vector(
             source_slices: crate::metadata::source_slices::read(&unit.metadata),
             anchors: store.anchors_for_unit(*unit_id)?,
             selected_because: reasons,
+            timestamp: unit.timestamp,
         });
     }
 

@@ -25,6 +25,7 @@ pub(crate) fn plan_expansion(
     fused: &[(i64, f64, u32)],
     query_text: &str,
     diagnostics: bool,
+    excluded: &HashSet<i64>,
 ) -> Result<ExpansionPlan, Box<dyn std::error::Error + Send + Sync>> {
     let seed_ids: Vec<i64> = fused
         .iter()
@@ -55,7 +56,7 @@ pub(crate) fn plan_expansion(
             let (connected, _more) =
                 store.units_for_anchor(kind, value, EXPANSION_CANDIDATES_PER_ANCHOR)?;
             for candidate in connected {
-                if candidate == seed {
+                if candidate == seed || excluded.contains(&candidate) {
                     continue;
                 }
                 let base = candidate_scores.entry(candidate).or_insert_with(|| {

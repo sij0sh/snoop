@@ -111,11 +111,17 @@ server.
 ```bash
 snoop index [PATH]                  # Refresh an existing index
 snoop ensure [PATH] --timeout 120   # Refresh safely for unattended use
-snoop query "question" --tokens 6000
-snoop inspect symbol refresh_session
+snoop query "question" --tokens 6000 [--exclude-session ID]
+snoop inspect symbol refresh_session [--exclude-session ID]
 snoop inspect unit 381
 snoop sessions refresh_session
 ```
+
+`query` limits each source file, commit, or session to three packet items by
+default. This diversity cap prevents one source from consuming the context
+budget. Packet timestamps use compact relative or calendar dates.
+`--exclude-session` is repeatable and removes episodes already visible in the
+calling agent's context.
 
 `ensure` prints one JSON object with a `refreshed`, `up-to-date`, `timeout`,
 `locked`, or `error` status. A concurrent process reports `locked`. Every status
@@ -161,6 +167,9 @@ read the same index:
 - `get_repo_context` runs `snoop query <query> --tokens <max_tokens>`.
 - `repo_symbol_context` runs `snoop inspect symbol <symbol>`.
 
+Both tools pass the current Pi session ID through `--exclude-session`. This
+prevents the current conversation from returning as repository evidence.
+
 The MCP server adds a worker pool and an embed deadline that degrades to
 lexical-only retrieval under load. The extension tools run one CLI process per
 call and need no server.
@@ -175,11 +184,11 @@ snoop mcp
 
 It implements JSON-RPC 2.0 and exposes two tools:
 
-- `get_repo_context` accepts `query` and optional `max_tokens`. It returns a
-  token-budgeted context packet.
-- `repo_symbol_context` accepts `symbol`. It returns code, docs, commits, and
-  agent episodes anchored to that symbol; commit entries carry their timestamp
-  and evidence text.
+- `get_repo_context` accepts `query`, optional `max_tokens`, and optional
+  `exclude_sessions` IDs. It returns a token-budgeted context packet.
+- `repo_symbol_context` accepts `symbol` and optional `exclude_sessions` IDs.
+  It returns code, docs, commits, and agent episodes anchored to that symbol;
+  commit and agent-session entries carry human-readable timestamps.
 
 Pi sessions skip this server: the extension above provides the same two tools
 through the CLI.

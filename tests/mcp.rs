@@ -68,10 +68,7 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(
-        names,
-        ["get_repo_context", "repo_symbol_context"]
-    );
+    assert_eq!(names, ["get_repo_context", "repo_symbol_context"]);
     for tool in tools["result"]["tools"].as_array().unwrap() {
         assert!(!tool["description"].as_str().unwrap().is_empty());
         assert_eq!(tool["inputSchema"]["type"], "object");
@@ -332,8 +329,8 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         "commit entries carry evidence_text"
     );
     assert!(
-        commits.iter().all(|entry| entry["timestamp"].is_i64()),
-        "commit entries carry timestamp"
+        commits.iter().all(|entry| entry["timestamp"].is_string()),
+        "commit entries carry rendered timestamps"
     );
 }
 

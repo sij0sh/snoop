@@ -129,6 +129,7 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
             top_n: 10,
             max_tokens: 4_000,
             diagnostics: true,
+            ..QueryOptions::default()
         },
     )
     .unwrap();
@@ -197,6 +198,7 @@ fn expansion_joins_code_docs_and_git_on_a_symbol() {
             top_n: 10,
             max_tokens: 4_000,
             diagnostics: false,
+            ..QueryOptions::default()
         },
     )
     .unwrap();

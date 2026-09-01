@@ -102,7 +102,10 @@ fn cli_inspect_symbol_prints_a_truncation_notice() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(stdout.is_array(), "inspect symbol still prints a JSON array");
+    assert!(
+        stdout.is_array(),
+        "inspect symbol still prints a JSON array"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("more units not shown"),

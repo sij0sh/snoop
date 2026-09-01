@@ -51,6 +51,21 @@ impl Store {
         Ok(output)
     }
 
+    /// All unit ids linked to one anchor, ordered oldest first.
+    pub fn unit_ids_for_anchor(&self, kind: &str, value: &str) -> rusqlite::Result<Vec<i64>> {
+        let Some(kind) = AnchorKind::parse(kind) else {
+            return Ok(Vec::new());
+        };
+        let mut statement = self.conn.prepare(
+            "SELECT DISTINCT ua.unit_id FROM unit_anchors ua
+             JOIN anchors a ON a.id=ua.anchor_id
+             WHERE a.kind=?1 AND a.value=?2
+             ORDER BY ua.unit_id",
+        )?;
+        let rows = statement.query_map(params![kind.as_str(), value], |row| row.get(0))?;
+        rows.collect()
+    }
+
     /// Units linked to one anchor, oldest first, capped at `limit`. Returns
     /// `(ids, more)` where `more` counts units beyond the page (0 = not
     /// truncated). The count is surfaced so display sites can say they are

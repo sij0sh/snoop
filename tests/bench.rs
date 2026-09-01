@@ -441,6 +441,7 @@ fn run_config(
         max_tokens: 2_000,
         // Scoring keys on unit ids and fused ranks, which live in diagnostics.
         diagnostics: true,
+        ..QueryOptions::default()
     };
     let mut result = ConfigResult::default();
     for class in CLASSES {

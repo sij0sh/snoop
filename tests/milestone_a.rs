@@ -72,6 +72,7 @@ fn indexes_incrementally_and_queries_four_channels() {
             top_n: 10,
             max_tokens: 2_000,
             diagnostics: true,
+            ..QueryOptions::default()
         },
     )
     .unwrap();
@@ -102,6 +103,7 @@ fn indexes_incrementally_and_queries_four_channels() {
             top_n: 10,
             max_tokens: 2_000,
             diagnostics: false,
+            ..QueryOptions::default()
         },
     )
     .unwrap();
@@ -158,6 +160,7 @@ fn deterministic_routing_changes_the_top_one_on_a_vocabulary_fixture() {
         top_n: 10,
         max_tokens: 180,
         diagnostics: true,
+        ..QueryOptions::default()
     };
     let baseline = query(
         &store,

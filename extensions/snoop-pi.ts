@@ -73,12 +73,15 @@ export default function snoopPi(pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const text = await runSnoop(
-        pi,
-        ["query", params.query, "--tokens", String(params.max_tokens ?? DEFAULT_MAX_TOKENS)],
-        ctx.cwd,
-        signal,
-      );
+      const args = [
+        "query",
+        params.query,
+        "--tokens",
+        String(params.max_tokens ?? DEFAULT_MAX_TOKENS),
+      ];
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (sessionId) args.push("--exclude-session", sessionId);
+      const text = await runSnoop(pi, args, ctx.cwd, signal);
       return { content: [{ type: "text", text }], details: {} };
     },
   });
@@ -98,7 +101,10 @@ export default function snoopPi(pi: ExtensionAPI) {
       }),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const text = await runSnoop(pi, ["inspect", "symbol", params.symbol], ctx.cwd, signal);
+      const args = ["inspect", "symbol", params.symbol];
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (sessionId) args.push("--exclude-session", sessionId);
+      const text = await runSnoop(pi, args, ctx.cwd, signal);
       return { content: [{ type: "text", text }], details: {} };
     },
   });

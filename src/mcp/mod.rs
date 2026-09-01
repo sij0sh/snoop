@@ -11,6 +11,7 @@ use crate::core::SourceKind;
 use crate::inference::Embedder;
 use crate::runtime::{query, query_with_vector, QueryChannels, QueryOptions};
 use crate::store::Store;
+use std::collections::HashSet;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const DEFAULT_MAX_TOKENS: usize = 6_000;
@@ -23,8 +24,23 @@ pub fn symbol_context_entries(
     store: &Store,
     symbol: &str,
 ) -> Result<(Vec<serde_json::Value>, usize), Error> {
+    symbol_context_entries_excluding(store, symbol, &HashSet::new(), QueryOptions::default().now)
+}
+
+pub fn symbol_context_entries_excluding(
+    store: &Store,
+    symbol: &str,
+    excluded: &HashSet<i64>,
+    now: i64,
+) -> Result<(Vec<serde_json::Value>, usize), Error> {
     let mut report = Vec::new();
-    let (ids, more) = store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)?;
+    let mut ids: Vec<i64> = store
+        .unit_ids_for_anchor("symbol", symbol)?
+        .into_iter()
+        .filter(|id| !excluded.contains(id))
+        .collect();
+    let more = ids.len().saturating_sub(ANCHOR_LOOKUP_LIMIT);
+    ids.truncate(ANCHOR_LOOKUP_LIMIT);
     for id in ids {
         if let Some(unit) = store.unit_by_id(id)? {
             let mut entry = serde_json::json!({
@@ -33,8 +49,16 @@ pub fn symbol_context_entries(
                 "locator": unit.locator,
                 "routing_text": unit.routing_text,
             });
+            if matches!(
+                unit.source_kind,
+                SourceKind::GitCommit | SourceKind::AgentSession
+            ) {
+                if let Some(timestamp) = unit.timestamp {
+                    entry["timestamp"] =
+                        serde_json::json!(crate::metadata::timestamp::render(timestamp, now));
+                }
+            }
             if unit.source_kind == SourceKind::GitCommit {
-                entry["timestamp"] = serde_json::json!(unit.timestamp);
                 entry["evidence_text"] = serde_json::json!(unit.evidence_text);
             }
             report.push(entry);
@@ -42,8 +66,6 @@ pub fn symbol_context_entries(
     }
     Ok((report, more))
 }
-
-
 
 fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
@@ -62,6 +84,11 @@ fn tool_definitions() -> serde_json::Value {
                         "type": "integer",
                         "description": "Maximum context to return. Default 6000.",
                         "default": DEFAULT_MAX_TOKENS
+                    },
+                    "exclude_sessions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Session IDs whose already-visible episodes must be excluded."
                     }
                 },
                 "required": ["query"]
@@ -77,6 +104,11 @@ fn tool_definitions() -> serde_json::Value {
                     "symbol": {
                         "type": "string",
                         "description": "Symbol to investigate, e.g. refresh_session."
+                    },
+                    "exclude_sessions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Session IDs whose already-visible episodes must be excluded."
                     }
                 },
                 "required": ["symbol"]
@@ -134,9 +166,11 @@ fn dispatch_tool(
                 .map(|value| value.clamp(100, MAX_TOKENS_LIMIT as u64) as usize)
                 .unwrap_or(DEFAULT_MAX_TOKENS);
             let channels = QueryChannels::for_embedder(embedder);
+            let exclude_unit_ids = excluded_session_units(store, arguments)?;
             let options = QueryOptions {
                 max_tokens,
                 channels,
+                exclude_unit_ids: exclude_unit_ids.clone(),
                 ..QueryOptions::default()
             };
             // Audit fix-c1: the query embedding is fetched under the serve
@@ -160,6 +194,7 @@ fn dispatch_tool(
                 let lexical = QueryOptions {
                     max_tokens,
                     channels: QueryChannels::for_embedder(None),
+                    exclude_unit_ids,
                     ..QueryOptions::default()
                 };
                 let report = query(store, None, query_text, &lexical)
@@ -177,7 +212,8 @@ fn dispatch_tool(
         }
         "repo_symbol_context" => {
             let symbol = required_symbol(arguments).map_err(ToolFailure::Error)?;
-            symbol_context_entries(store, &symbol)
+            let excluded = excluded_session_units(store, arguments)?;
+            symbol_context_entries_excluding(store, &symbol, &excluded, QueryOptions::default().now)
                 .map(|(entries, more)| {
                     if more > 0 {
                         ToolSuccess::Truncated(serde_json::json!(entries))
@@ -192,6 +228,36 @@ fn dispatch_tool(
             message: format!("unknown tool: {other}"),
         }),
     }
+}
+
+fn excluded_session_units(
+    store: &Store,
+    arguments: &serde_json::Value,
+) -> Result<HashSet<i64>, ToolFailure> {
+    let Some(value) = arguments.get("exclude_sessions") else {
+        return Ok(HashSet::new());
+    };
+    let Some(sessions) = value.as_array() else {
+        return Err(ToolFailure::Usage {
+            code: -32602,
+            message: "exclude_sessions must be an array of strings".to_string(),
+        });
+    };
+    let mut excluded = HashSet::new();
+    for value in sessions {
+        let Some(session) = value.as_str() else {
+            return Err(ToolFailure::Usage {
+                code: -32602,
+                message: "exclude_sessions must be an array of strings".to_string(),
+            });
+        };
+        excluded.extend(
+            store
+                .unit_ids_for_anchor("session", session)
+                .map_err(|error| ToolFailure::Error(error.to_string()))?,
+        );
+    }
+    Ok(excluded)
 }
 
 fn required_symbol(arguments: &serde_json::Value) -> Result<String, String> {

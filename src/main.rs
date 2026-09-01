@@ -1,5 +1,9 @@
+mod cli_support;
+
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+
+use cli_support::{excluded_session_units, print_command_error, print_ensure_error};
 
 use clap::{Parser, Subcommand};
 use snoop::core::Repository;
@@ -54,12 +58,16 @@ enum Command {
         explain: bool,
         #[arg(long)]
         evidence_only: bool,
+        #[arg(long = "exclude-session")]
+        exclude_sessions: Vec<String>,
     },
     Inspect {
         target: String,
         value: String,
         #[arg(long)]
         db: Option<PathBuf>,
+        #[arg(long = "exclude-session")]
+        exclude_sessions: Vec<String>,
     },
     Sessions {
         symbol: String,
@@ -126,18 +134,6 @@ fn embedder() -> Option<Box<dyn Embedder>> {
     } else {
         Some(Box::new(LlamaServerEmbedder::new(&url, &version)))
     }
-}
-
-fn print_ensure_error(message: String) -> ! {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "status": "error",
-            "error": message,
-        }))
-        .unwrap_or_else(|_| "{\"status\": \"error\"}".to_string())
-    );
-    std::process::exit(1)
 }
 
 /// `Stdin` adapter implementing `BufRead` that is `Send`: the std `StdinLock`
@@ -297,9 +293,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             top,
             explain,
             evidence_only,
+            exclude_sessions,
         } => {
             let store = open_store(&db_path(db, Path::new("."))?)?;
-            bound_repository(&store)?;
+            if let Err(error) = bound_repository(&store) {
+                print_command_error(error.to_string(), Some("run: snoop init ."));
+            }
+            let exclude_unit_ids = excluded_session_units(&store, &exclude_sessions)?;
             let embedder = embedder();
             let channels = if evidence_only {
                 if embedder.is_some() {
@@ -319,6 +319,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     top_n: top,
                     max_tokens: tokens,
                     diagnostics: explain,
+                    exclude_unit_ids,
+                    ..QueryOptions::default()
                 },
             )?;
             if let Some(debug) = &report.debug {
@@ -326,12 +328,24 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             println!("{}", serde_json::to_string_pretty(&report.packet)?);
         }
-        Command::Inspect { target, value, db } => {
+        Command::Inspect {
+            target,
+            value,
+            db,
+            exclude_sessions,
+        } => {
             let store = open_store(&db_path(db, Path::new("."))?)?;
-            bound_repository(&store)?;
+            if let Err(error) = bound_repository(&store) {
+                print_command_error(error.to_string(), Some("run: snoop init ."));
+            }
+            let exclude_unit_ids = excluded_session_units(&store, &exclude_sessions)?;
+            let now = QueryOptions::default().now;
             match target.as_str() {
                 "unit" => {
                     let id: i64 = value.parse().map_err(|_| "unit id must be numeric")?;
+                    if exclude_unit_ids.contains(&id) {
+                        return Err(format!("unit {id} not found").into());
+                    }
                     let unit = store.unit_by_id(id)?.ok_or_else(
                         || -> Box<dyn std::error::Error + Send + Sync> {
                             format!("unit {id} not found").into()
@@ -348,6 +362,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             })
                         })
                         .collect::<Vec<_>>();
+                    let mut unit = serde_json::to_value(unit)?;
+                    if let Some(timestamp) = unit["timestamp"].as_i64() {
+                        unit["timestamp"] =
+                            serde_json::json!(snoop::timestamp::render(timestamp, now));
+                    } else if let Some(object) = unit.as_object_mut() {
+                        object.remove("timestamp");
+                    }
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&serde_json::json!({
@@ -357,7 +378,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     );
                 }
                 "symbol" => {
-                    let (entries, more) = snoop::mcp::symbol_context_entries(&store, &value)?;
+                    let (entries, more) = snoop::mcp::symbol_context_entries_excluding(
+                        &store,
+                        &value,
+                        &exclude_unit_ids,
+                        now,
+                    )?;
                     println!("{}", serde_json::to_string_pretty(&entries)?);
                     if more > 0 {
                         eprintln!(
@@ -372,6 +398,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Command::Sessions { symbol, db } => {
             let store = open_store(&db_path(db, Path::new("."))?)?;
             bound_repository(&store)?;
+            let now = QueryOptions::default().now;
 
             let mut defining_files = std::collections::HashSet::new();
             let mut hidden_units = 0_usize;
@@ -401,12 +428,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                     if let Some(unit) = store.unit_by_id(id)? {
                         if unit.source_kind == snoop::core::SourceKind::AgentSession {
-                            episodes.push(serde_json::json!({
+                            let mut episode = serde_json::json!({
                                 "unit_id": id,
                                 "locator": unit.locator,
-                                "timestamp": unit.timestamp,
                                 "evidence_text": unit.evidence_text,
-                            }));
+                            });
+                            if let Some(timestamp) = unit.timestamp {
+                                episode["timestamp"] =
+                                    serde_json::json!(snoop::timestamp::render(timestamp, now));
+                            }
+                            episodes.push(episode);
                         }
                     }
                 }

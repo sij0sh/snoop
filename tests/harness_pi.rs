@@ -153,6 +153,7 @@ fn sessions_table_populated_and_query_returns_agent_evidence() {
             top_n: 10,
             max_tokens: 4_000,
             diagnostics: true,
+            ..QueryOptions::default()
         },
     )
     .unwrap();

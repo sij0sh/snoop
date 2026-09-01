@@ -221,7 +221,7 @@ pub(crate) mod source_slices {
     }
 }
 
-pub(crate) mod timestamp {
+pub mod timestamp {
     use super::Value;
 
     /// `None` leaves the key absent, matching the historical writer.
@@ -233,6 +233,41 @@ pub(crate) mod timestamp {
 
     pub fn read(metadata: &Value) -> Option<i64> {
         metadata["timestamp"].as_i64()
+    }
+
+    pub fn render(epoch: i64, now: i64) -> String {
+        let age = now.saturating_sub(epoch).max(0);
+        if age < 3_600 {
+            return format!("{}m ago", age / 60);
+        }
+        if age < 86_400 {
+            return format!("{}h ago", age / 3_600);
+        }
+
+        let date = civil_date(epoch.div_euclid(86_400));
+        let days = age / 86_400;
+        if days < 365 {
+            format!("{date} ({days}d ago)")
+        } else {
+            date
+        }
+    }
+
+    fn civil_date(days_since_epoch: i64) -> String {
+        let z = days_since_epoch + 719_468;
+        let era = z.div_euclid(146_097);
+        let day_of_era = z - era * 146_097;
+        let year_of_era =
+            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let mut year = year_of_era + era * 400;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_prime = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+        let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+        if month <= 2 {
+            year += 1;
+        }
+        format!("{year:04}-{month:02}-{day:02}")
     }
 }
 
@@ -376,5 +411,22 @@ mod tests {
         timestamp::set(&mut metadata, Some(1_700_000_000));
         assert_eq!(timestamp::read(&metadata), Some(1_700_000_000));
         assert_eq!(timestamp::read(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn timestamp_render_uses_compact_relative_and_calendar_dates() {
+        let now = 1_704_153_600; // 2024-01-02 00:00:00 UTC
+        assert_eq!(timestamp::render(now, now), "0m ago");
+        assert_eq!(timestamp::render(now + 60, now), "0m ago");
+        assert_eq!(timestamp::render(now - 3_599, now), "59m ago");
+        assert_eq!(timestamp::render(now - 3_600, now), "1h ago");
+        assert_eq!(timestamp::render(now - 86_399, now), "23h ago");
+        assert_eq!(timestamp::render(now - 86_400, now), "2024-01-01 (1d ago)");
+        assert_eq!(
+            timestamp::render(now - 364 * 86_400, now),
+            "2023-01-03 (364d ago)"
+        );
+        assert_eq!(timestamp::render(now - 365 * 86_400, now), "2023-01-02");
+        assert_eq!(timestamp::render(0, now), "1970-01-01");
     }
 }
