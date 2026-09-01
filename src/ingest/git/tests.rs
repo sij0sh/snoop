@@ -475,3 +475,37 @@ fn spawn_count_is_flat_in_files_per_commit() {
         "expected <= 8 spawns for one commit, got {large}"
     );
 }
+
+#[test]
+fn batch_stream_stays_aligned_across_nonblob_replies() {
+    use std::io::Cursor;
+
+    let mut stream = Cursor::new(
+        b"<a> commit 8\nbodyline\n<b> blob 6\nworld!\n<c> missing\n".to_vec(),
+    );
+    let super::history::Reply::Empty = super::history::decode_reply(&mut stream) else {
+        panic!("non-blob reply must drain its frame and return Empty");
+    };
+    let super::history::Reply::Blob(text) = super::history::decode_reply(&mut stream) else {
+        panic!("the blob reply after a drained frame must decode");
+    };
+    assert_eq!(text, "world!");
+    let super::history::Reply::Empty = super::history::decode_reply(&mut stream) else {
+        panic!("missing replies stay aligned without draining");
+    };
+    assert_eq!(
+        stream.position() as usize,
+        b"<a> commit 8\nbodyline\n<b> blob 6\nworld!\n<c> missing\n".len(),
+        "every reply byte is consumed exactly once"
+    );
+}
+
+#[test]
+fn unparsable_size_marks_stream_broken() {
+    use std::io::Cursor;
+
+    let mut stream = Cursor::new(b"<a> commit notanumber\nwhatever\n".to_vec());
+    let super::history::Reply::Broken = super::history::decode_reply(&mut stream) else {
+        panic!("an unparsable size means framing is already lost");
+    };
+}

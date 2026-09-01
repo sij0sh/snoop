@@ -293,32 +293,65 @@ impl BlobReader {
             self.broken = true;
             return None;
         }
-        let mut header = String::new();
-        if self.stdout.read_line(&mut header).is_err() || header.trim().is_empty() {
-            self.broken = true;
-            return None;
+        match decode_reply(&mut self.stdout) {
+            Reply::Blob(text) => Some(text),
+            Reply::Empty => None,
+            Reply::Broken => {
+                self.broken = true;
+                None
+            }
         }
-        let mut fields = header.split_whitespace();
-        let kind = fields.nth(1);
-        let size = fields.next().and_then(|size| size.parse::<usize>().ok());
-        let (Some("blob"), Some(size)) = (kind, size) else {
-            // "missing" reply or non-blob object: same as the old None.
-            return None;
-        };
-        let mut bytes = vec![0u8; size];
-        if self.stdout.read_exact(&mut bytes).is_err() {
-            self.broken = true;
-            return None;
+    }
+}
+
+/// One decoded `cat-file --batch` reply frame.
+pub(super) enum Reply {
+    /// Text blob contents.
+    Blob(String),
+    /// No content for this request; the stream stays frame-aligned.
+    Empty,
+    /// Framing lost; the reader must stop issuing requests.
+    Broken,
+}
+
+/// Decode one reply frame, keeping the stream aligned for the next request.
+/// A non-blob object's size bytes, newline, and body are drained before
+/// returning `Empty` — abandoning them would make every later read misparse
+/// (defect-audit 20260901192001-22ddf0a5). A "missing" reply is header-only
+/// and aligned as-is; an unparsable or absent size marks the stream broken.
+pub(super) fn decode_reply(reader: &mut impl BufRead) -> Reply {
+    let mut header = String::new();
+    if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
+        return Reply::Broken;
+    }
+    let mut fields = header.split_whitespace();
+    let kind = fields.nth(1);
+    let size = fields.next().and_then(|value| value.parse::<usize>().ok());
+    match (kind, size) {
+        (Some("blob"), Some(size)) => {
+            let mut bytes = vec![0u8; size];
+            if reader.read_exact(&mut bytes).is_err() {
+                return Reply::Broken;
+            }
+            let mut trailing = [0u8; 1];
+            if reader.read_exact(&mut trailing).is_err() {
+                return Reply::Broken;
+            }
+            if bytes.contains(&0) {
+                return Reply::Empty;
+            }
+            Reply::Blob(String::from_utf8_lossy(&bytes).into_owned())
         }
-        let mut trailing = [0u8; 1];
-        if self.stdout.read_exact(&mut trailing).is_err() {
-            self.broken = true;
-            return None;
+        (Some("missing"), _) => Reply::Empty,
+        (_, Some(size)) => {
+            let mut frame = vec![0u8; size.saturating_add(1)];
+            if reader.read_exact(&mut frame).is_err() {
+                Reply::Broken
+            } else {
+                Reply::Empty
+            }
         }
-        if bytes.contains(&0) {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&bytes).into_owned())
+        _ => Reply::Broken,
     }
 }
 
