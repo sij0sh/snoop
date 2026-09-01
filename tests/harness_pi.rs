@@ -354,3 +354,46 @@ fn session_with_foreign_or_missing_cwd_is_skipped_as_foreign() {
         "only the session whose header cwd is this repo root is indexed"
     );
 }
+
+#[test]
+fn unreadable_sessions_directory_skips_instead_of_failing() {
+    let _guard = env_lock();
+    let directory = tempfile::tempdir().unwrap();
+    let sessions_root = tempfile::tempdir().unwrap();
+    fixture(directory.path(), sessions_root.path());
+    env_with_sessions_root(sessions_root.path());
+
+    let canonical = directory.path().canonicalize().unwrap();
+    let mangled = sessions_root.path().join(
+        snoop::ingest::harness::session_directory_name(&canonical.to_string_lossy()),
+    );
+    use std::os::unix::fs::PermissionsExt;
+    let original = std::fs::metadata(&mangled).unwrap().permissions();
+    std::fs::set_permissions(&mangled, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&mangled).is_ok() {
+        // Root bypasses permission bits; the skip cannot be observed here.
+        std::fs::set_permissions(&mangled, original).unwrap();
+        return;
+    }
+
+    let mut store = Store::open_in_memory().unwrap();
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), None, None).unwrap();
+    assert!(
+        session_locators(&store).is_empty(),
+        "an unreadable sessions directory serves no session data"
+    );
+    assert!(
+        outcome.changed_sources > 0,
+        "the run still indexes the repository's own sources"
+    );
+
+    std::fs::set_permissions(&mangled, original).unwrap();
+    let _ = index_repository_bounded(&mut store, directory.path(), None, None).unwrap();
+    assert!(
+        session_locators(&store)
+            .iter()
+            .all(|locator| locator == "pi-session:019f-test-snoop-0001"),
+        "restored permissions let the next run discover sessions again"
+    );
+}

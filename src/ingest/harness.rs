@@ -48,16 +48,33 @@ fn directory_entries_matching(
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(files),
-        Err(error) => return Err(error.into()),
+        // Non-NotFound directory IO failures (permissions, races) degrade
+        // to "no session data" with a loud warning instead of aborting the
+        // run, matching the skip-not-fail contract of every other source
+        // family (defect-audit 20260901192001-22ddf0a5).
+        Err(error) => {
+            eprintln!(
+                "warning: skipping unreadable sessions directory {}: {error}",
+                root.display()
+            );
+            return Ok(files);
+        }
     };
     for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => {
+                eprintln!(
+                    "warning: skipped unreadable sessions-directory entry in {}: {error}",
+                    root.display()
+                );
+                continue;
+            }
+        };
         if path.extension().and_then(|value| value.to_str()) != Some(extension) {
             continue;
         }
-        if entry
-            .metadata()
+        if std::fs::metadata(&path)
             .is_ok_and(|meta| meta.len() > MAX_SESSION_BYTES)
         {
             continue;
