@@ -43,40 +43,24 @@ pub fn symbol_context_entries(
     Ok((report, more))
 }
 
-pub fn history_entries(
-    store: &Store,
-    symbol: &str,
-) -> Result<(Vec<serde_json::Value>, usize), Error> {
-    let mut history = Vec::new();
-    let (ids, more) = store.units_for_anchor("symbol", symbol, ANCHOR_LOOKUP_LIMIT)?;
-    for id in ids {
-        if let Some(unit) = store.unit_by_id(id)? {
-            if unit.source_kind == SourceKind::GitCommit {
-                history.push(serde_json::json!({
-                    "unit_id": id,
-                    "locator": unit.locator,
-                    "timestamp": unit.timestamp,
-                    "evidence_text": unit.evidence_text,
-                }));
-            }
-        }
-    }
-    Ok((history, more))
-}
+
 
 fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
         {
             "name": "get_repo_context",
-            "description": "Return a token-budgeted context packet of repository evidence \
-                            (current code, docs, git history, prior agent work) for a query.",
+            "description": "Investigate a repository question across current code, docs, git \
+                            history, and prior agent work. Returns a token-budgeted evidence packet.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Natural-language question"},
+                    "query": {
+                        "type": "string",
+                        "description": "What you want to understand about the repository."
+                    },
                     "max_tokens": {
                         "type": "integer",
-                        "description": "Evidence token budget: the sum of admitted evidence never exceeds it (default 6000)",
+                        "description": "Maximum context to return. Default 6000.",
                         "default": DEFAULT_MAX_TOKENS
                     }
                 },
@@ -85,12 +69,15 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo_symbol_context",
-            "description": "Return all units (code, docs, commits, agent episodes) anchored \
-                            to a symbol name; commit units carry timestamp and evidence_text.",
+            "description": "Get repository context for a known symbol across code, docs, \
+                            commits, and prior agent work.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "symbol": {"type": "string", "description": "Symbol name, e.g. refresh_session"}
+                    "symbol": {
+                        "type": "string",
+                        "description": "Symbol to investigate, e.g. refresh_session."
+                    }
                 },
                 "required": ["symbol"]
             }

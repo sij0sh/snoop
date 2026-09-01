@@ -57,16 +57,19 @@ export default function snoopPi(pi: ExtensionAPI) {
     name: "get_repo_context",
     label: "Repo Context",
     description:
-      "Return a token-budgeted packet of repository evidence (current code, docs, git history, prior agent work) for a natural-language query.",
+      "Investigate a repository question across current code, docs, git history, and prior agent work. Returns a token-budgeted evidence packet.",
     promptSnippet:
-      "Query indexed repository evidence (code, docs, commits, agent sessions) with a natural-language question",
+      "Investigate a repository question across code, docs, git history, and prior agent work",
     promptGuidelines: [
-      "Use get_repo_context to answer questions about repository history, design decisions, or prior agent work before searching files directly.",
+      "Default to get_repo_context for repository investigation and understanding questions.",
+      "Use direct tools when their exact output is needed for the next action.",
     ],
     parameters: Type.Object({
-      query: Type.String({ description: "Natural-language question" }),
+      query: Type.String({
+        description: "What you want to understand about the repository.",
+      }),
       max_tokens: Type.Optional(
-        Type.Number({ description: "Evidence token budget (default 6000)" }),
+        Type.Number({ description: "Maximum context to return. Default 6000." }),
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -84,13 +87,15 @@ export default function snoopPi(pi: ExtensionAPI) {
     name: "repo_symbol_context",
     label: "Symbol Context",
     description:
-      "Return all units (code, docs, commits, agent episodes) anchored to a symbol name; commit units carry timestamp and evidence_text.",
-    promptSnippet: "Look up all indexed evidence (code, docs, commits, sessions) for a code symbol",
+      "Get repository context for a known symbol across code, docs, commits, and prior agent work.",
+    promptSnippet: "Get repository context for a known symbol",
     promptGuidelines: [
-      "Use repo_symbol_context when the user names a specific symbol and you need its indexed code, docs, commit history, or prior session notes.",
+      "Use repo_symbol_context when the user names a specific symbol.",
     ],
     parameters: Type.Object({
-      symbol: Type.String({ description: "Symbol name, e.g. refresh_session" }),
+      symbol: Type.String({
+        description: "Symbol to investigate, e.g. refresh_session.",
+      }),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const text = await runSnoop(pi, ["inspect", "symbol", params.symbol], ctx.cwd, signal);
