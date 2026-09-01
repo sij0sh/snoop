@@ -183,3 +183,106 @@ fn deleted_file_commits_do_not_block_indexing() {
         "deletion commits index as file units"
     );
 }
+
+fn git_out(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("git spawns");
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn is_ancestor_truth_table() {
+    let directory = tempfile::tempdir().unwrap();
+    fixture_repo(directory.path());
+    let head = git_out(directory.path(), &["rev-parse", "HEAD"]);
+    let root_commit = git_out(directory.path(), &["rev-list", "--max-parents=0", "HEAD"]);
+    assert!(snoop::ingest::git::is_ancestor(
+        directory.path(),
+        &root_commit,
+        &head
+    ));
+    assert!(snoop::ingest::git::is_ancestor(directory.path(), &head, &head));
+    assert!(!snoop::ingest::git::is_ancestor(
+        directory.path(),
+        &head,
+        &root_commit
+    ));
+    assert!(!snoop::ingest::git::is_ancestor(
+        directory.path(),
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        &head
+    ));
+}
+
+#[test]
+fn reindex_after_checkout_of_ancestor_purges_abandoned_history() {
+    let directory = tempfile::tempdir().unwrap();
+    fixture_repo(directory.path());
+    let base_branch = git_out(directory.path(), &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    // Index at a feature tip ahead of the base branch.
+    git(directory.path(), &["checkout", "--quiet", "-b", "feature"]);
+    std::fs::write(
+        directory.path().join("feature.md"),
+        "# Feature\n\nomega zephyr marker\n",
+    )
+    .unwrap();
+    git(directory.path(), &["add", "."]);
+    git(
+        directory.path(),
+        &["commit", "--quiet", "-m", "feature work omega zephyr"],
+    );
+    let feature_tip = git_out(directory.path(), &["rev-parse", "HEAD"]);
+
+    let mut store = Store::open_in_memory().unwrap();
+    index_repository_bounded(&mut store, directory.path(), None, None).unwrap();
+    assert!(
+        store
+            .source_by_locator(&format!("git:{feature_tip}"))
+            .unwrap()
+            .is_some()
+    );
+
+    // HEAD moves backward to the ancestor base tip.
+    git(directory.path(), &["checkout", "--quiet", &base_branch]);
+    let base_tip = git_out(directory.path(), &["rev-parse", "HEAD"]);
+
+    let outcome =
+        index_repository_bounded(&mut store, directory.path(), None, None).unwrap();
+    assert_eq!(
+        outcome.deleted_sources, 2,
+        "the abandoned feature commit and its now-gone feature.md are deleted"
+    );
+    assert!(
+        store
+            .source_by_locator(&format!("git:{feature_tip}"))
+            .unwrap()
+            .is_none(),
+        "abandoned feature commit must stop serving"
+    );
+    let root = directory.path().canonicalize().unwrap();
+    let repository = store
+        .bind_repository(&root.to_string_lossy())
+        .unwrap();
+    assert_eq!(
+        repository.metadata["git_tip"].as_str(),
+        Some(base_tip.as_str()),
+        "stored tip must move back to HEAD"
+    );
+
+    // A reindexed DB agrees with a fresh DB at the identical HEAD.
+    let mut fresh = Store::open_in_memory().unwrap();
+    index_repository_bounded(&mut fresh, directory.path(), None, None).unwrap();
+    assert_eq!(
+        store.git_commit_locators().unwrap(),
+        fresh.git_commit_locators().unwrap()
+    );
+}

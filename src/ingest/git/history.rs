@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -46,6 +47,27 @@ fn git(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error +
 
 pub fn is_history_root(root: &Path) -> bool {
     root.join(".git").exists()
+}
+
+/// True when `ancestor` is reachable from `descendant` (`git merge-base
+/// --is-ancestor` exit 0); any git failure counts as "not an ancestor" so
+/// callers fall back to the full-ingest reconciliation path.
+pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> bool {
+    git(root, &["merge-base", "--is-ancestor", ancestor, descendant]).is_ok()
+}
+
+/// Every commit reachable from HEAD: the reconciliation set a full ingest
+/// uses to decide which stored locators keep serving.
+pub fn reachable_oids(
+    root: &Path,
+) -> Result<HashSet<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let out = git(root, &["rev-list", "HEAD"])?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect())
 }
 
 pub fn list_commits(

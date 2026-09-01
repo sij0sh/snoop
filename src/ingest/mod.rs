@@ -248,12 +248,36 @@ fn index_repository_body(
 
     if git::is_history_root(&root) {
         let stored_tip = metadata::git_tip::read(&repository.metadata).map(String::from);
-        let commits = match (!force_rebuild).then_some(stored_tip.as_deref()).flatten() {
+        // tip..HEAD is empty whenever HEAD is not ahead of the stored tip
+        // (checkout of an ancestor or sibling tip), so a delta keyed on the
+        // bare range would serve abandoned history forever. The delta runs
+        // only under its validity precondition; anything else falls back to
+        // a full reachable ingest that prunes unreachable stored locators
+        // (defect-audit 20260901192001-22ddf0a5).
+        let delta_tip = (!force_rebuild)
+            .then_some(stored_tip.as_deref())
+            .flatten()
+            .filter(|tip| git::is_ancestor(&root, tip, "HEAD"));
+        let commits = match delta_tip {
             Some(tip) => git::list_commits_past(&root, git::MAX_COMMITS, tip)?,
             None => git::list_commits(&root, git::MAX_COMMITS)?,
         };
-        for locator in store.git_commit_locators()? {
-            present.insert(locator);
+        if delta_tip.is_some() {
+            for locator in store.git_commit_locators()? {
+                present.insert(locator);
+            }
+        } else if stored_tip.is_some() {
+            let stored_locators = store.git_commit_locators()?;
+            match git::reachable_oids(&root) {
+                // Keep only locators still reachable from HEAD; the rest
+                // drop out of `present` so delete_sources_not_in purges
+                // the abandoned history.
+                Ok(reachable) => present.extend(stored_locators.into_iter().filter(|locator| {
+                    reachable.contains(locator.strip_prefix("git:").unwrap_or(locator))
+                })),
+                // Retention over deletion when reachability is unknown.
+                Err(_) => present.extend(stored_locators),
+            }
         }
         let newest_tip = commits.first().map(|commit| commit.oid.clone());
         for commit in commits {
