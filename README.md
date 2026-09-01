@@ -54,8 +54,9 @@ snoop install
 ```
 
 Detects and auto-configures Pi, Claude Code, Cursor, Codex CLI, opencode,
-Gemini CLI, VS Code (GitHub Copilot), Windsurf, and Kiro — wiring the `snoop
-mcp` server into each. This is the step that connects Snoop to your agent;
+Gemini CLI, VS Code (GitHub Copilot), Windsurf, and Kiro. Every agent except
+Pi gets the `snoop mcp` server. Pi gets the extension below, which substitutes
+for the MCP server (see "Pi tools as the MCP substitute"). This is the step that connects Snoop to your agent;
 installing the CLI in step 1 does not do it on its own. It only wires up your
 agent — it does not index any code; building each project's index is the
 separate `snoop init` in step 3.
@@ -135,7 +136,7 @@ launch.
 - `SNOOP_SESSIONS_ROOT`: Pi session directory. Defaults to
   `~/.pi/agent/sessions`.
 
-## Pi session refresh
+## Pi extension
 
 [`extensions/snoop-pi.ts`](extensions/snoop-pi.ts) starts a detached
 `snoop ensure` on Pi session startup, new, resume, and fork events. `snoop
@@ -150,9 +151,19 @@ cp extensions/snoop-pi.ts ~/.pi/agent/extensions/
 Set `SNOOP_ENSURE=0` to disable the trigger. Spawn failures are appended to
 `.snoop-ensure.log` in the project directory.
 
-The extension also registers two Pi tools backed by the CLI, mirroring the MCP
-tools below for sessions without the MCP server: `get_repo_context` runs
-`snoop query`, and `repo_symbol_context` runs `snoop inspect symbol`.
+### Pi tools as the MCP substitute
+
+The extension substitutes for the `snoop mcp` server. `snoop install` wires Pi
+through this extension only, never through MCP. The extension registers the
+same two tools, with the same names, parameters, and defaults, and both paths
+read the same index:
+
+- `get_repo_context` runs `snoop query <query> --tokens <max_tokens>`.
+- `repo_symbol_context` runs `snoop inspect symbol <symbol>`.
+
+The MCP server adds a worker pool and an embed deadline that degrades to
+lexical-only retrieval under load. The extension tools run one CLI process per
+call and need no server.
 
 ## MCP server
 
@@ -169,3 +180,6 @@ It implements JSON-RPC 2.0 and exposes two tools:
 - `repo_symbol_context` accepts `symbol`. It returns code, docs, commits, and
   agent episodes anchored to that symbol; commit entries carry their timestamp
   and evidence text.
+
+Pi sessions skip this server: the extension above provides the same two tools
+through the CLI.
