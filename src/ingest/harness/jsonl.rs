@@ -235,6 +235,19 @@ pub(super) fn read_session_id(path: &Path) -> Option<String> {
     (!id.is_empty()).then_some(id)
 }
 
+/// Launch cwd recorded in the session header (pi v3 writes the top-level
+/// `cwd`); the reader-side attribution key that survives directory-name
+/// collisions.
+pub(super) fn read_session_cwd(path: &Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let mut first = String::new();
+    std::io::BufReader::new(file).read_line(&mut first).ok()?;
+    let header: serde_json::Value = serde_json::from_str(first.trim()).ok()?;
+    let cwd = header.get("cwd")?.as_str()?.to_string();
+    (!cwd.is_empty()).then_some(cwd)
+}
+
 fn block_call_id(block: &ContentBlock) -> Option<String> {
     block.id.clone().or_else(|| block.tool_call_id.clone())
 }

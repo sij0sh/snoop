@@ -59,6 +59,10 @@ fn write_session(sessions_root: &Path, canonical_root: &Path, name: &str, lines:
         &canonical_root.to_string_lossy(),
     ));
     std::fs::create_dir_all(&directory).unwrap();
+    // The header's fixture cwd must equal the canonical repo root: cwd is
+    // the discovery attribution key (defect-audit 20260901192001-22ddf0a5).
+    let mut lines: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    lines[0] = lines[0].replace("/tmp/bench", &canonical_root.to_string_lossy());
     std::fs::write(directory.join(name), lines.join("\n") + "\n").unwrap();
 }
 

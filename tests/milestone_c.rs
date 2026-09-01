@@ -79,9 +79,14 @@ fn fixture(root: &Path, sessions_root: &Path) {
         &canonical.to_string_lossy(),
     ));
     std::fs::create_dir_all(&directory).unwrap();
+    let mut lines = vec![format!(
+        r#"{{"type":"session","version":3,"id":"milestone-c-session","timestamp":"2026-08-21T09:00:00.000Z","cwd":"{}"}}"#,
+        canonical.display()
+    )];
+    lines.extend(SESSION_LINES[1..].iter().map(|line| line.to_string()));
     std::fs::write(
         directory.join("2026-08-21T09-00-00-000Z_milestone-c-session.jsonl"),
-        SESSION_LINES.join("\n") + "\n",
+        lines.join("\n") + "\n",
     )
     .unwrap();
 }

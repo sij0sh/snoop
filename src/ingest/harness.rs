@@ -79,11 +79,29 @@ pub fn discover_sessions(
     repo_root: &Path,
 ) -> Result<Vec<SessionFile>, Box<dyn std::error::Error + Send + Sync>> {
     let directory = sessions_root(home).join(session_directory_name(&repo_root.to_string_lossy()));
+    let canonical_root = repo_root.canonicalize().ok();
     let mut sessions = Vec::new();
     for path in directory_entries_matching(&directory, "jsonl")? {
         let Some(session_id) = jsonl::read_session_id(&path) else {
             continue;
         };
+        // The mangled directory name is many-to-one (`/x/a-b/c` and
+        // `/x/a/b/c` flatten to the same directory), so it cannot attribute
+        // sessions on its own. A session belongs here only when its header
+        // cwd is this repo root; unverifiable sessions are foreign and are
+        // skipped with a warning so they never cross-index and their stale
+        // locators purge via delete_sources_not_in (defect-audit
+        // 20260901192001-22ddf0a5, decision D1).
+        let session_cwd = jsonl::read_session_cwd(&path)
+            .and_then(|cwd| std::fs::canonicalize(cwd).ok());
+        if session_cwd.as_deref() != canonical_root.as_deref() {
+            eprintln!(
+                "warning: skipped foreign session {session_id} (missing, unreadable, or \
+                 non-matching cwd header in {})",
+                path.display()
+            );
+            continue;
+        }
         sessions.push(SessionFile { path, session_id });
     }
     Ok(sessions)

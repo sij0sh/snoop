@@ -183,10 +183,14 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
     std::fs::create_dir_all(&session_dir).unwrap();
     std::fs::write(
         session_dir.join("2026-08-21T09-00-00-000Z_mcp-session.jsonl"),
-        concat!(
-            r#"{"type":"session","version":3,"id":"mcp-session","timestamp":"2026-08-21T09:00:00.000Z","cwd":"/tmp/fixture"}"#, "\n",
-            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-21T09:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Investigate the refresh_session rotation order"}]}}"#, "\n",
-            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-21T09:01:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The rotation ordering was deliberate to prevent stale reuse."}]}}"#, "\n",
+        format!(
+            "{}\n{}\n{}\n",
+            format!(
+                r#"{{"type":"session","version":3,"id":"mcp-session","timestamp":"2026-08-21T09:00:00.000Z","cwd":"{}"}}"#,
+                canonical.display()
+            ),
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-21T09:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Investigate the refresh_session rotation order"}]}}"#,
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-21T09:01:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The rotation ordering was deliberate to prevent stale reuse."}]}}"#,
         ),
     )
     .unwrap();

@@ -15,8 +15,9 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 const SESSION_ID: &str = "019f-test-snoop-0001";
+// The session header carries no cwd; fixture() prepends one built from the
+// canonical repo root, which is the discovery attribution key.
 const SESSION_LINES: &[&str] = &[
-    r#"{"type":"session","version":3,"id":"019f-test-snoop-0001","timestamp":"2026-08-20T10:00:00.000Z","cwd":"/tmp/snoop-harness-fixture"}"#,
     r#"{"type":"model_change","id":"m1","parentId":null,"timestamp":"2026-08-20T10:00:00.100Z"}"#,
     r#"{"type":"message","id":"u1","parentId":"m1","timestamp":"2026-08-20T10:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Investigate why refresh_session loops forever"}]}}"#,
     r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-20T10:01:05.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private reasoning"},{"type":"toolCall","id":"c1","name":"read","arguments":{"path":"src/auth.rs"}}]}}"#,
@@ -44,7 +45,13 @@ fn fixture(root: &Path, sessions_root: &Path) {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let file = directory.join("2026-08-20T10-00-00-000Z_019f-test-snoop-0001.jsonl");
-    std::fs::write(file, SESSION_LINES.join("\n") + "\n").unwrap();
+    let header = format!(
+        r#"{{"type":"session","version":3,"id":"{SESSION_ID}","timestamp":"2026-08-20T10:00:00.000Z","cwd":"{}"}}"#,
+        canonical.display()
+    );
+    let mut lines = vec![header];
+    lines.extend(SESSION_LINES.iter().map(|line| line.to_string()));
+    std::fs::write(file, lines.join("\n") + "\n").unwrap();
 }
 
 fn env_with_sessions_root(root: &Path) {
@@ -210,4 +217,140 @@ fn reindexing_unchanged_sessions_is_a_noop() {
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
     let _ = before;
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .status()
+        .expect("git spawns");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn write_session_file(directory: &Path, name: &str, session_id: &str, cwd: Option<&str>, token: &str) {
+    let header = match cwd {
+        Some(cwd) => format!(
+            r#"{{"type":"session","version":3,"id":"{session_id}","timestamp":"2026-08-20T10:00:00.000Z","cwd":"{cwd}"}}"#
+        ),
+        None => format!(
+            r#"{{"type":"session","version":3,"id":"{session_id}","timestamp":"2026-08-20T10:00:00.000Z"}}"#
+        ),
+    };
+    let turn = format!(
+        r#"{{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-20T10:01:00.000Z","message":{{"role":"user","content":[{{"type":"text","text":"Notes about {token}"}}]}}}}"#
+    );
+    std::fs::write(directory.join(name), format!("{header}\n{turn}\n")).unwrap();
+}
+
+fn session_locators(store: &Store) -> Vec<String> {
+    store
+        .unit_ids()
+        .unwrap()
+        .into_iter()
+        .filter_map(|id| store.unit_by_id(id).unwrap())
+        .map(|unit| unit.locator)
+        .filter(|locator| locator.starts_with("pi-session:"))
+        .collect()
+}
+
+#[test]
+fn colliding_session_directory_names_stay_attributed_by_cwd() {
+    let _guard = env_lock();
+    let base = tempfile::tempdir().unwrap();
+    // The mangling rule turns '/' and '-' into '-', so these two roots
+    // flatten to the same sessions directory.
+    let dash = base.path().join("a-b").join("c");
+    let slash = base.path().join("a").join("b").join("c");
+    std::fs::create_dir_all(&dash).unwrap();
+    std::fs::create_dir_all(&slash).unwrap();
+    git(&dash, &["init", "--quiet"]);
+    git(&slash, &["init", "--quiet"]);
+    let dash = dash.canonicalize().unwrap();
+    let slash = slash.canonicalize().unwrap();
+    assert_eq!(
+        snoop::ingest::harness::session_directory_name(&dash.to_string_lossy()),
+        snoop::ingest::harness::session_directory_name(&slash.to_string_lossy()),
+        "precondition: the two roots collide on one directory name"
+    );
+
+    let sessions_root = tempfile::tempdir().unwrap();
+    let shared = sessions_root.path().join(
+        snoop::ingest::harness::session_directory_name(&dash.to_string_lossy()),
+    );
+    std::fs::create_dir_all(&shared).unwrap();
+    write_session_file(
+        &shared,
+        "s1.jsonl",
+        "collide-dash-a1",
+        Some(&dash.to_string_lossy()),
+        "quartz-dash-token",
+    );
+    write_session_file(
+        &shared,
+        "s2.jsonl",
+        "collide-slash-b2",
+        Some(&slash.to_string_lossy()),
+        "quartz-slash-token",
+    );
+    env_with_sessions_root(sessions_root.path());
+
+    let mut dash_store = Store::open_in_memory().unwrap();
+    index_repository_bounded(&mut dash_store, &dash, None, None).unwrap();
+    assert_eq!(
+        session_locators(&dash_store),
+        vec!["pi-session:collide-dash-a1".to_string()],
+        "the dash repo must index only its own session"
+    );
+
+    let mut slash_store = Store::open_in_memory().unwrap();
+    index_repository_bounded(&mut slash_store, &slash, None, None).unwrap();
+    assert_eq!(
+        session_locators(&slash_store),
+        vec!["pi-session:collide-slash-b2".to_string()],
+        "the slash repo must index only its own session"
+    );
+}
+
+#[test]
+fn session_with_foreign_or_missing_cwd_is_skipped_as_foreign() {
+    let _guard = env_lock();
+    let directory = tempfile::tempdir().unwrap();
+    let canonical = directory.path().canonicalize().unwrap();
+    let sessions_root = tempfile::tempdir().unwrap();
+    let shared = sessions_root.path().join(
+        snoop::ingest::harness::session_directory_name(&canonical.to_string_lossy()),
+    );
+    std::fs::create_dir_all(&shared).unwrap();
+    write_session_file(
+        &shared,
+        "own.jsonl",
+        "cwd-own-c1",
+        Some(&canonical.to_string_lossy()),
+        "own-session-token",
+    );
+    write_session_file(
+        &shared,
+        "foreign.jsonl",
+        "cwd-foreign-f2",
+        Some("/somewhere/else"),
+        "foreign-session-token",
+    );
+    write_session_file(
+        &shared,
+        "legacy.jsonl",
+        "cwd-missing-m3",
+        None,
+        "legacy-session-token",
+    );
+    env_with_sessions_root(sessions_root.path());
+
+    let mut store = Store::open_in_memory().unwrap();
+    index_repository_bounded(&mut store, directory.path(), None, None).unwrap();
+    assert_eq!(
+        session_locators(&store),
+        vec!["pi-session:cwd-own-c1".to_string()],
+        "only the session whose header cwd is this repo root is indexed"
+    );
 }

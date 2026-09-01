@@ -189,7 +189,12 @@ fn session_append_reembeds_only_new_episodes() {
             ));
     std::fs::create_dir_all(&session_directory).unwrap();
     let session_path = session_directory.join("2026-08-20T10-00-00-000Z_inc-0001.jsonl");
-    std::fs::write(&session_path, SESSION_HEAD.join("\n") + "\n").unwrap();
+    let mut lines = vec![SESSION_HEAD[0].replace(
+        "/tmp/snoop-incremental",
+        &canonical.to_string_lossy(),
+    )];
+    lines.extend(SESSION_HEAD[1..].iter().map(|line| line.to_string()));
+    std::fs::write(&session_path, lines.join("\n") + "\n").unwrap();
     std::env::set_var("SNOOP_SESSIONS_ROOT", sessions_root.path());
 
     let mut store = Store::open_in_memory().unwrap();
@@ -199,8 +204,12 @@ fn session_append_reembeds_only_new_episodes() {
     assert_eq!(count_kind(&store, SourceKind::AgentSession), 1);
     assert!(first.embedded > 0);
 
-    let mut appended = SESSION_HEAD.to_vec();
-    appended.extend_from_slice(SESSION_APPEND);
+    let mut appended: Vec<String> = SESSION_HEAD.iter().map(|line| line.to_string()).collect();
+    appended[0] = appended[0].replace(
+        "/tmp/snoop-incremental",
+        &canonical.to_string_lossy(),
+    );
+    appended.extend(SESSION_APPEND.iter().map(|line| line.to_string()));
     std::fs::write(&session_path, appended.join("\n") + "\n").unwrap();
 
     let second =
