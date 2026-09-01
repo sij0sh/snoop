@@ -65,6 +65,23 @@ fn deadline_passed(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
+/// Lock admission waits at most the index-lease budget when the caller has
+/// no deadline of its own (`snoop index` passes None): waiting longer cannot
+/// help, because a wait past the lease TTL ends in a lost lease right after
+/// admission anyway (defect-audit 20260901192001-22ddf0a5). The env override
+/// exists for tests and contention triage.
+fn admission_ttl() -> Duration {
+    std::env::var("SNOOP_ADMISSION_TTL_SECS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(INDEX_LEASE_TTL_SECS as u64))
+}
+
+fn admission_deadline(deadline: Option<Instant>) -> Instant {
+    deadline.unwrap_or_else(|| Instant::now() + admission_ttl())
+}
+
 fn state_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
@@ -117,6 +134,7 @@ pub fn acquire_backfill_lock(
     let path = state_dir()
         .expect("checked above")
         .join("embed-backfill.lock");
+    let deadline = admission_deadline(deadline);
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -133,7 +151,7 @@ pub fn acquire_backfill_lock(
                 return Ok(BackfillGuard { _file: Some(file) });
             }
             Err(std::fs::TryLockError::WouldBlock) => {
-                if deadline_passed(deadline) {
+                if Instant::now() >= deadline {
                     return Err(BudgetExhausted.into());
                 }
                 std::thread::sleep(LOCK_POLL);
@@ -213,6 +231,20 @@ mod tests {
     use super::*;
     use crate::inference::{EmbedError, EmbedResult};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn admission_deadline_defaults_to_the_lease_budget() {
+        let before = Instant::now();
+        let deadline = admission_deadline(None);
+        assert!(deadline >= before + admission_ttl());
+        assert!(deadline <= Instant::now() + admission_ttl());
+    }
+
+    #[test]
+    fn explicit_admission_deadline_wins() {
+        let fixed = Instant::now() + Duration::from_secs(7);
+        assert_eq!(admission_deadline(Some(fixed)), fixed);
+    }
 
     /// Fails the first `transient_failures` calls with a transient error,
     /// then succeeds; counts embed calls.

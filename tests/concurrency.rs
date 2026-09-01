@@ -466,3 +466,64 @@ mod embed_lease_choreography {
         drop(store);
     }
 }
+
+#[test]
+fn index_without_deadline_times_out_at_the_admission_bound() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let repo = directory.path().join("repo");
+    write_repo(&repo, 2);
+    let db = directory.path().join("index.db");
+    let lock_dir = state.path().join("snoop");
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    let lock_path = lock_dir.join("embed-backfill.lock");
+
+    // A holder keeps the machine-wide backfill slot far past the short
+    // admission TTL the contender is given.
+    let mut holder = Command::new("flock")
+        .arg(&lock_path)
+        .args(["sleep", "10"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("flock spawns");
+    let held = (1..=50).any(|_| {
+        let free = Command::new("flock")
+            .arg("-n")
+            .arg(&lock_path)
+            .arg("true")
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        !free
+    });
+    assert!(held, "the flock holder must hold the lock before indexing");
+
+    let started = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_snoop"))
+        .args([
+            "index",
+            repo.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .env("SNOOP_EMBED_URL", "mock")
+        .env("XDG_STATE_HOME", state.path())
+        .env("SNOOP_ADMISSION_TTL_SECS", "1")
+        .output()
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(9),
+        "index must not wait out the holder: waited {elapsed:?}"
+    );
+    assert!(output.status.success(), "the bounded wait surfaces as a clean timeout");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["timed_out"], serde_json::json!(true),
+        "expected the clean timeout outcome: {report}"
+    );
+    let _ = holder.kill();
+    let _ = holder.wait();
+}
