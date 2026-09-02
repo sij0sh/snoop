@@ -20,7 +20,8 @@ without a query-time generative LLM.
 - Cap each result by an explicit evidence token budget.
 
 Snoop parses Rust, Python, TypeScript, TSX, JavaScript, JSX, Go, Java, C#, C,
-C++, Ruby, PHP, and shell code. Repository scanning respects Git ignore rules.
+C++, Ruby, PHP, shell, and GDScript code, plus Godot scenes (`.tscn`) and text
+resources (`.tres`). Repository scanning respects Git ignore rules.
 
 ## Prerequisites
 

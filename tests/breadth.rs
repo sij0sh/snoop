@@ -18,6 +18,8 @@ fn code_symbols_are_retrievable_across_languages() {
     let directory = tempfile::tempdir().unwrap();
     let sessions_root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(directory.path().join("src")).unwrap();
+    std::fs::create_dir_all(directory.path().join("actors")).unwrap();
+    std::fs::create_dir_all(directory.path().join("items")).unwrap();
     std::fs::write(
         directory.path().join("src/auth.py"),
         "def rotate_token(token):\n    validate(token)\n    return refresh(token)\n",
@@ -58,6 +60,34 @@ fn code_symbols_are_retrievable_across_languages() {
         "namespace snoop {\n\nclass Room {\n  public:\n    void admit(int guest);\n};\n\nvoid Room::admit(int guest) { count_ += guest; }\n\n}  // namespace snoop\n",
     )
     .unwrap();
+    std::fs::write(
+        directory.path().join("actors/player.gd"),
+        "class_name Player\nextends CharacterBody2D\n\n## Reduces health by the given amount.\nfunc take_damage(amount: int) -> void:\n\thealth -= amount\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("actors/player.tscn"),
+        concat!(
+            "[gd_scene load_steps=2 format=3]\n\n",
+            "[ext_resource type=\"Script\" path=\"res://actors/player.gd\" id=\"1_player\"]\n\n",
+            "[node name=\"Player\" type=\"CharacterBody2D\"]\n",
+            "script = ExtResource(\"1_player\")\n",
+            "speed = 300.0\n\n",
+            "[node name=\"Camera\" type=\"Camera2D\" parent=\".\"]\n",
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("items/sword.tres"),
+        concat!(
+            "[gd_resource type=\"WeaponData\" load_steps=2 format=3]\n\n",
+            "[sub_resource type=\"Gradient\" id=\"Gradient_ramp\"]\n",
+            "offsets = PackedFloat32Array(0, 1)\n\n",
+            "[resource]\n",
+            "damage = 12\n",
+        ),
+    )
+    .unwrap();
     std::fs::create_dir_all(sessions_root.path().join("empty")).unwrap();
     std::env::set_var("SNOOP_SESSIONS_ROOT", sessions_root.path());
 
@@ -75,6 +105,9 @@ fn code_symbols_are_retrievable_across_languages() {
         ("drain_queue", "src/Worker.cs"),
         ("scale_vector", "src/geom.c"),
         ("admit", "src/room.cpp"),
+        ("take_damage", "actors/player.gd"),
+        ("Camera", "actors/player.tscn"),
+        ("Gradient_ramp", "items/sword.tres"),
     ] {
         let report = query(
             &store,

@@ -3,6 +3,8 @@ mod c;
 mod c_declarator;
 mod cpp;
 mod csharp;
+mod gdscript;
+mod godot_resource;
 mod php;
 mod ruby;
 mod shell;
@@ -327,10 +329,13 @@ fn code_extensions_cover_the_shared_registry() {
         "a.phtml",
         "a.sh",
         "a.bash",
+        "a.gd",
+        "a.tscn",
+        "a.tres",
     ] {
         assert!(supports_code_path(locator), "{locator} must be supported");
     }
-    for locator in ["a.md", "a.txt", "README", "a.json", ".gitignore", "a.tf"] {
+    for locator in ["a.md", "a.txt", "README", "a.json", ".gitignore", "a.tf", "a.godot", "a.scn"] {
         assert!(!supports_code_path(locator), "{locator} must not be code");
     }
     assert_eq!(language_name("src/app.tsx"), Some("typescript"));

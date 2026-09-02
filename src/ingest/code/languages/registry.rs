@@ -10,8 +10,11 @@ use super::{
     cpp_interesting, cpp_is_import, cpp_leading_context, cpp_symbol_info, csharp_atomic,
     csharp_interesting, csharp_is_import, csharp_leading_context, csharp_symbol_info,
     ecmascript_atomic, ecmascript_interesting, ecmascript_is_import, ecmascript_leading_context,
-    ecmascript_symbol_info, field_symbol_info, go_atomic, go_interesting, go_is_import,
-    go_leading_context, go_symbol_info, java_atomic, java_interesting, java_is_import,
+    ecmascript_symbol_info, field_symbol_info, gdscript_atomic, gdscript_interesting,
+    gdscript_is_import, gdscript_leading_context, gdscript_symbol_info, go_atomic, go_interesting,
+    go_is_import, go_leading_context, go_symbol_info, godot_resource_atomic,
+    godot_resource_interesting, godot_resource_is_import, godot_resource_leading_context,
+    godot_resource_symbol_info, java_atomic, java_interesting, java_is_import,
     java_leading_context, java_symbol_info, php_atomic, php_interesting, php_is_import,
     php_leading_context, php_symbol_info, python_atomic, python_interesting, python_is_import,
     python_leading_context, ruby_atomic, ruby_interesting, ruby_is_import, ruby_leading_context,
@@ -24,7 +27,7 @@ use crate::core::AtomKind;
 pub const CODE_EXTENSIONS: &[&str] = &[
     "rs", "py", "pyi", "pyw", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "go", "java",
     "cs", "c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "ipp", "tpp", "inl", "rb", "rake",
-    "gemspec", "php", "phtml", "sh", "bash",
+    "gemspec", "php", "phtml", "sh", "bash", "gd", "tscn", "tres",
 ];
 
 /// One language's recognition rules. Matching order is exact filename,
@@ -134,6 +137,23 @@ const LANGUAGES: &[(&str, LanguageMatch)] = &[
             extensions: &["sh", "bash"],
             filenames: &[],
             shebangs: &["sh", "bash"],
+        },
+    ),
+    (
+        "gdscript",
+        LanguageMatch {
+            extensions: &["gd"],
+            filenames: &[],
+            shebangs: &[],
+        },
+    ),
+    (
+        // One grammar covers both serialized resource formats.
+        "godot_resource",
+        LanguageMatch {
+            extensions: &["tscn", "tres"],
+            filenames: &[],
+            shebangs: &[],
         },
     ),
 ];
@@ -344,6 +364,26 @@ fn build_language(key: &'static str) -> Option<Language> {
             is_atomic: shell_atomic,
             is_import: shell_is_import,
             root_overview: true,
+        }),
+        "gdscript" => Some(Language {
+            name: "gdscript",
+            language: || tree_sitter_gdscript::LANGUAGE.into(),
+            interesting: gdscript_interesting,
+            symbol_info: gdscript_symbol_info,
+            leading_context: gdscript_leading_context,
+            is_atomic: gdscript_atomic,
+            is_import: gdscript_is_import,
+            root_overview: false,
+        }),
+        "godot_resource" => Some(Language {
+            name: "godot_resource",
+            language: || tree_sitter_godot_resource::LANGUAGE.into(),
+            interesting: godot_resource_interesting,
+            symbol_info: godot_resource_symbol_info,
+            leading_context: godot_resource_leading_context,
+            is_atomic: godot_resource_atomic,
+            is_import: godot_resource_is_import,
+            root_overview: false,
         }),
         _ => None,
     }

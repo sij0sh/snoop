@@ -11,7 +11,9 @@ mod c;
 mod cpp;
 mod csharp;
 mod ecmascript;
+mod gdscript;
 mod go;
+mod godot_resource;
 mod java;
 mod php;
 mod python;
@@ -29,7 +31,15 @@ use ecmascript::{
     ecmascript_atomic, ecmascript_interesting, ecmascript_is_import, ecmascript_leading_context,
     ecmascript_symbol_info,
 };
+use gdscript::{
+    gdscript_atomic, gdscript_interesting, gdscript_is_import, gdscript_leading_context,
+    gdscript_symbol_info,
+};
 use go::{go_atomic, go_interesting, go_is_import, go_leading_context, go_symbol_info};
+use godot_resource::{
+    godot_resource_atomic, godot_resource_interesting, godot_resource_is_import,
+    godot_resource_leading_context, godot_resource_symbol_info,
+};
 use java::{java_atomic, java_interesting, java_is_import, java_leading_context, java_symbol_info};
 use php::{php_atomic, php_interesting, php_is_import, php_leading_context, php_symbol_info};
 use python::{python_atomic, python_interesting, python_is_import, python_leading_context};
