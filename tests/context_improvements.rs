@@ -109,34 +109,17 @@ fn cli_excludes_sessions_from_query_and_symbol_inspection() {
 }
 
 #[test]
-fn mcp_excludes_sessions_and_renders_timestamps() {
+fn context_excludes_sessions_and_symbol_inspection_renders_timestamps() {
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("index.db");
     fixture(&db);
     let store = Store::open(&db).unwrap();
-    let call = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "repo_symbol_context",
-            "arguments": {
-                "symbol": "refresh_session",
-                "exclude_sessions": ["current-session"]
-            }
-        }
-    });
-    let response = snoop::mcp::handle_message(&store, None, &call).unwrap();
-    let text = response["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(!text.contains("pi-session:current-session"), "{text}");
-    assert!(text.contains("src/auth.rs"), "{text}");
-
     let query_call = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
         "params": {
-            "name": "get_repo_context",
+            "name": "context",
             "arguments": {
                 "query": "refresh_session alpha",
                 "exclude_sessions": ["current-session"]

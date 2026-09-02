@@ -5,10 +5,8 @@
 // instant and freshness is eventual. For a blocking pre-launch check use
 // `snoop ensure . --timeout 30 && exec pi` instead.
 //
-// Also registers two read-only tools backed by the snoop CLI, mirroring the
-// snoop MCP server for pi sessions that do not attach MCP:
-//   get_repo_context      -> snoop query <query> --tokens <max_tokens>
-//   repo_symbol_context   -> snoop inspect symbol <symbol>
+// Also registers the read-only `context` tool backed by `snoop query`,
+// mirroring the snoop MCP server for pi sessions that do not attach MCP.
 //
 // Install: copy into ~/.pi/agent/extensions/ or <project>/.pi/extensions/.
 // Disable ensure: SNOOP_ENSURE=0. Budget: SNOOP_ENSURE_TIMEOUT (seconds, default 120).
@@ -54,19 +52,19 @@ async function runSnoop(
 
 export default function snoopPi(pi: ExtensionAPI) {
   pi.registerTool({
-    name: "get_repo_context",
-    label: "Repo Context",
+    name: "context",
+    label: "Repository Context",
     description:
-      "Investigate a repository question across current code, docs, git history, and prior agent work. Returns a token-budgeted evidence packet.",
+      "Get relevant repository context across code, docs, git history, and prior agent work.",
     promptSnippet:
-      "Investigate a repository question across code, docs, git history, and prior agent work",
+      "Get relevant repository context across code, docs, git history, and prior agent work",
     promptGuidelines: [
-      "Default to get_repo_context for repository investigation and understanding questions.",
+      "Use context for repository investigation and understanding questions.",
       "Use direct tools when their exact output is needed for the next action.",
     ],
     parameters: Type.Object({
       query: Type.String({
-        description: "What you want to understand about the repository.",
+        description: "What you need to understand.",
       }),
       max_tokens: Type.Optional(
         Type.Number({ description: "Maximum context to return. Default 6000." }),
@@ -79,29 +77,6 @@ export default function snoopPi(pi: ExtensionAPI) {
         "--tokens",
         String(params.max_tokens ?? DEFAULT_MAX_TOKENS),
       ];
-      const sessionId = ctx.sessionManager.getSessionId();
-      if (sessionId) args.push("--exclude-session", sessionId);
-      const text = await runSnoop(pi, args, ctx.cwd, signal);
-      return { content: [{ type: "text", text }], details: {} };
-    },
-  });
-
-  pi.registerTool({
-    name: "repo_symbol_context",
-    label: "Symbol Context",
-    description:
-      "Get repository context for a known symbol across code, docs, commits, and prior agent work.",
-    promptSnippet: "Get repository context for a known symbol",
-    promptGuidelines: [
-      "Use repo_symbol_context when the user names a specific symbol.",
-    ],
-    parameters: Type.Object({
-      symbol: Type.String({
-        description: "Symbol to investigate, e.g. refresh_session.",
-      }),
-    }),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const args = ["inspect", "symbol", params.symbol];
       const sessionId = ctx.sessionManager.getSessionId();
       if (sessionId) args.push("--exclude-session", sessionId);
       const text = await runSnoop(pi, args, ctx.cwd, signal);

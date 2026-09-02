@@ -158,17 +158,14 @@ cp extensions/snoop-pi.ts ~/.pi/agent/extensions/
 Set `SNOOP_ENSURE=0` to disable the trigger. Spawn failures are appended to
 `.snoop-ensure.log` in the project directory.
 
-### Pi tools as the MCP substitute
+### Pi tool as the MCP substitute
 
 The extension substitutes for the `snoop mcp` server. `snoop install` wires Pi
 through this extension only, never through MCP. The extension registers the
-same two tools, with the same names, parameters, and defaults, and both paths
-read the same index:
+same `context` capability and token-budget default. It runs `snoop query
+<query> --tokens <max_tokens>`, and both paths read the same index.
 
-- `get_repo_context` runs `snoop query <query> --tokens <max_tokens>`.
-- `repo_symbol_context` runs `snoop inspect symbol <symbol>`.
-
-Both tools pass the current Pi session ID through `--exclude-session`. This
+The tool passes the current Pi session ID through `--exclude-session`. This
 prevents the current conversation from returning as repository evidence.
 
 The MCP server adds a worker pool and an embed deadline that degrades to
@@ -183,13 +180,13 @@ Run the stdio MCP server over an existing index:
 snoop mcp
 ```
 
-It implements JSON-RPC 2.0 and exposes two tools:
+It implements JSON-RPC 2.0 and exposes one tool:
 
-- `get_repo_context` accepts `query`, optional `max_tokens`, and optional
-  `exclude_sessions` IDs. It returns a token-budgeted context packet.
-- `repo_symbol_context` accepts `symbol` and optional `exclude_sessions` IDs.
-  It returns code, docs, commits, and agent episodes anchored to that symbol;
-  commit and agent-session entries carry human-readable timestamps.
+- `context` accepts `query`, optional `max_tokens`, and optional
+  `exclude_sessions` IDs. It returns a token-budgeted packet across code,
+  documentation, git history, and prior agent work. Symbol queries use the
+  same retrieval pipeline and automatically expand symbol anchors.
 
-Pi sessions skip this server: the extension above provides the same two tools
-through the CLI.
+Pi sessions skip this server. The extension above provides the same tool
+through the CLI. Exact symbol inspection remains available through `snoop
+inspect symbol <symbol>`.

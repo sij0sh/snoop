@@ -70,15 +70,14 @@ pub fn symbol_context_entries_excluding(
 fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
         {
-            "name": "get_repo_context",
-            "description": "Investigate a repository question across current code, docs, git \
-                            history, and prior agent work. Returns a token-budgeted evidence packet.",
+            "name": "context",
+            "description": "Get relevant repository context across code, docs, git history, and prior agent work.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "What you want to understand about the repository."
+                        "description": "What you need to understand."
                     },
                     "max_tokens": {
                         "type": "integer",
@@ -93,27 +92,7 @@ fn tool_definitions() -> serde_json::Value {
                 },
                 "required": ["query"]
             }
-        },
-        {
-            "name": "repo_symbol_context",
-            "description": "Get repository context for a known symbol across code, docs, \
-                            commits, and prior agent work.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "symbol": {
-                        "type": "string",
-                        "description": "Symbol to investigate, e.g. refresh_session."
-                    },
-                    "exclude_sessions": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Session IDs whose already-visible episodes must be excluded."
-                    }
-                },
-                "required": ["symbol"]
-            }
-        },
+        }
     ])
 }
 
@@ -135,9 +114,6 @@ enum ToolSuccess {
     /// Served without the embedder within its deadline; payload is complete
     /// but vector channels were dropped.
     Degraded(serde_json::Value),
-    /// The anchor lookup hit the display cap; the payload holds the oldest
-    /// page and the response carries `truncated: true` (defect-audit c6).
-    Truncated(serde_json::Value),
 }
 
 enum ToolFailure {
@@ -152,82 +128,67 @@ fn dispatch_tool(
     tool: &str,
     arguments: &serde_json::Value,
 ) -> Result<ToolSuccess, ToolFailure> {
-    match tool {
-        "get_repo_context" => {
-            let Some(query_text) = arguments.get("query").and_then(|value| value.as_str()) else {
-                return Err(ToolFailure::Usage {
-                    code: -32602,
-                    message: "get_repo_context requires query".to_string(),
-                });
-            };
-            let max_tokens = arguments
-                .get("max_tokens")
-                .and_then(|value| value.as_u64())
-                .map(|value| value.clamp(100, MAX_TOKENS_LIMIT as u64) as usize)
-                .unwrap_or(DEFAULT_MAX_TOKENS);
-            let channels = QueryChannels::for_embedder(embedder);
-            let exclude_unit_ids = excluded_session_units(store, arguments)?;
-            let options = QueryOptions {
-                max_tokens,
-                channels,
-                exclude_unit_ids: exclude_unit_ids.clone(),
-                ..QueryOptions::default()
-            };
-            // Audit fix-c1: the query embedding is fetched under the serve
-            // deadline up front and reused, so the query itself never embeds.
-            let mut query_vector = None;
-            let mut degraded = false;
-            if channels.has_vector_channels() {
-                if let Some(bounded) = bounded {
-                    match serve::bounded_embed_query(bounded, query_text) {
-                        serve::BoundedEmbedOutcome::Vector(vector) => query_vector = Some(vector),
-                        serve::BoundedEmbedOutcome::Degrade => degraded = true,
-                        serve::BoundedEmbedOutcome::Failed(error) => {
-                            return Err(ToolFailure::Error(error.to_string()))
-                        }
-                    }
+    if tool != "context" {
+        return Err(ToolFailure::Usage {
+            code: -32602,
+            message: format!("unknown tool: {tool}"),
+        });
+    }
+    let Some(query_text) = arguments.get("query").and_then(|value| value.as_str()) else {
+        return Err(ToolFailure::Usage {
+            code: -32602,
+            message: "context requires query".to_string(),
+        });
+    };
+    let max_tokens = arguments
+        .get("max_tokens")
+        .and_then(|value| value.as_u64())
+        .map(|value| value.clamp(100, MAX_TOKENS_LIMIT as u64) as usize)
+        .unwrap_or(DEFAULT_MAX_TOKENS);
+    let channels = QueryChannels::for_embedder(embedder);
+    let exclude_unit_ids = excluded_session_units(store, arguments)?;
+    let options = QueryOptions {
+        max_tokens,
+        channels,
+        exclude_unit_ids: exclude_unit_ids.clone(),
+        ..QueryOptions::default()
+    };
+    // Audit fix-c1: the query embedding is fetched under the serve
+    // deadline up front and reused, so the query itself never embeds.
+    let mut query_vector = None;
+    let mut degraded = false;
+    if channels.has_vector_channels() {
+        if let Some(bounded) = bounded {
+            match serve::bounded_embed_query(bounded, query_text) {
+                serve::BoundedEmbedOutcome::Vector(vector) => query_vector = Some(vector),
+                serve::BoundedEmbedOutcome::Degrade => degraded = true,
+                serve::BoundedEmbedOutcome::Failed(error) => {
+                    return Err(ToolFailure::Error(error.to_string()))
                 }
             }
-            if degraded {
-                // Deadline hit or breaker open: answer from lexical channels
-                // only; the response carries `degraded: true`.
-                let lexical = QueryOptions {
-                    max_tokens,
-                    channels: QueryChannels::for_embedder(None),
-                    exclude_unit_ids,
-                    ..QueryOptions::default()
-                };
-                let report = query(store, None, query_text, &lexical)
-                    .map_err(|error| ToolFailure::Error(error.to_string()))?;
-                eprintln!("snoop mcp: degraded lexical-only answer (embed deadline/breaker)");
-                return Ok(ToolSuccess::Degraded(
-                    serde_json::to_value(&report.packet).unwrap_or_default(),
-                ));
-            }
-            let report = query_with_vector(store, embedder, query_text, &options, query_vector)
-                .map_err(|error| ToolFailure::Error(error.to_string()))?;
-            Ok(ToolSuccess::Payload(
-                serde_json::to_value(&report.packet).unwrap_or_default(),
-            ))
         }
-        "repo_symbol_context" => {
-            let symbol = required_symbol(arguments).map_err(ToolFailure::Error)?;
-            let excluded = excluded_session_units(store, arguments)?;
-            symbol_context_entries_excluding(store, &symbol, &excluded, QueryOptions::default().now)
-                .map(|(entries, more)| {
-                    if more > 0 {
-                        ToolSuccess::Truncated(serde_json::json!(entries))
-                    } else {
-                        ToolSuccess::Payload(serde_json::json!(entries))
-                    }
-                })
-                .map_err(|error| ToolFailure::Error(error.to_string()))
-        }
-        other => Err(ToolFailure::Usage {
-            code: -32602,
-            message: format!("unknown tool: {other}"),
-        }),
     }
+    if degraded {
+        // Deadline hit or breaker open: answer from lexical channels
+        // only; the response carries `degraded: true`.
+        let lexical = QueryOptions {
+            max_tokens,
+            channels: QueryChannels::for_embedder(None),
+            exclude_unit_ids,
+            ..QueryOptions::default()
+        };
+        let report = query(store, None, query_text, &lexical)
+            .map_err(|error| ToolFailure::Error(error.to_string()))?;
+        eprintln!("snoop mcp: degraded lexical-only answer (embed deadline/breaker)");
+        return Ok(ToolSuccess::Degraded(
+            serde_json::to_value(&report.packet).unwrap_or_default(),
+        ));
+    }
+    let report = query_with_vector(store, embedder, query_text, &options, query_vector)
+        .map_err(|error| ToolFailure::Error(error.to_string()))?;
+    Ok(ToolSuccess::Payload(
+        serde_json::to_value(&report.packet).unwrap_or_default(),
+    ))
 }
 
 fn excluded_session_units(
@@ -258,14 +219,6 @@ fn excluded_session_units(
         );
     }
     Ok(excluded)
-}
-
-fn required_symbol(arguments: &serde_json::Value) -> Result<String, String> {
-    arguments
-        .get("symbol")
-        .and_then(|value| value.as_str())
-        .map(|symbol| symbol.to_string())
-        .ok_or_else(|| "this tool requires a symbol".to_string())
 }
 
 pub fn handle_message(
@@ -308,19 +261,13 @@ fn frame_tool_result(
 ) -> serde_json::Value {
     match outcome {
         Ok(success) => {
-            let (payload, truncated) = match success {
-                ToolSuccess::Payload(payload) => (payload, false),
-                ToolSuccess::Degraded(payload) => (payload, false),
-                ToolSuccess::Truncated(payload) => (payload, true),
+            let payload = match success {
+                ToolSuccess::Payload(payload) | ToolSuccess::Degraded(payload) => payload,
             };
-            let mut result =
-                text_result(serde_json::to_string_pretty(&payload).unwrap_or_default());
-            if truncated {
-                // Additive response field: the anchor lookup hit the display
-                // cap and only the oldest page is served (defect-audit c6).
-                result["truncated"] = serde_json::json!(true);
-            }
-            result_response(id, result)
+            result_response(
+                id,
+                text_result(serde_json::to_string_pretty(&payload).unwrap_or_default()),
+            )
         }
         Err(ToolFailure::Usage { code, message }) => error_response(id, code, message),
         Err(ToolFailure::Error(message)) => result_response(id, {

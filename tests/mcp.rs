@@ -68,7 +68,7 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names, ["get_repo_context", "repo_symbol_context"]);
+    assert_eq!(names, ["context"]);
     for tool in tools["result"]["tools"].as_array().unwrap() {
         assert!(!tool["description"].as_str().unwrap().is_empty());
         assert_eq!(tool["inputSchema"]["type"], "object");
@@ -86,19 +86,10 @@ fn protocol_lifecycle_initialize_list_call_and_errors() {
         &store,
         Some(&embedder),
         &serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
-            "params": {"name": "get_repo_context", "arguments": {}}}),
+            "params": {"name": "context", "arguments": {}}}),
     )
     .unwrap();
     assert_eq!(misuse["error"]["code"], -32602);
-
-    let empty_symbol = handle_message(
-        &store,
-        Some(&embedder),
-        &serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
-            "params": {"name": "repo_symbol_context", "arguments": {}}}),
-    )
-    .unwrap();
-    assert_eq!(empty_symbol["result"]["isError"], true);
 
     let unknown_tool = handle_message(
         &store,
@@ -234,10 +225,8 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
         serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
-            "params":{"name":"get_repo_context","arguments":{
+            "params":{"name":"context","arguments":{
                 "query":"why does refresh_session rotate the token","max_tokens":2000}}}),
-        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
-            "params":{"name":"repo_symbol_context","arguments":{"symbol":"refresh_session"}}}),
     ];
     {
         use std::io::Write;
@@ -278,7 +267,7 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 2);
+    assert_eq!(names, ["context"]);
 
     let get_context = by_id(3);
     assert!(get_context["result"]["isError"].is_null());
@@ -310,32 +299,6 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
             "MCP packets stay lean: {field}"
         );
     }
-
-    let symbol = by_id(4);
-    let symbol_entries: serde_json::Value =
-        serde_json::from_str(symbol["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    let symbol_list = symbol_entries.as_array().unwrap();
-    assert!(
-        symbol_list
-            .iter()
-            .any(|entry| entry["source_kind"] == "code"),
-        "repo_symbol_context answers current code"
-    );
-    let commits = symbol_list
-        .iter()
-        .filter(|entry| entry["source_kind"] == "git_commit")
-        .collect::<Vec<_>>();
-    assert!(!commits.is_empty(), "repo_symbol_context answers history");
-    assert!(
-        commits.iter().any(|entry| entry["evidence_text"]
-            .as_str()
-            .is_some_and(|text| text.contains("cache step"))),
-        "commit entries carry evidence_text"
-    );
-    assert!(
-        commits.iter().all(|entry| entry["timestamp"].is_string()),
-        "commit entries carry rendered timestamps"
-    );
 }
 
 #[test]
@@ -351,7 +314,7 @@ fn serve_exits_cleanly_at_eof() {
 }
 
 /// AP-1 invariant: the control plane never queues behind tool calls. Ping is
-/// answered immediately even though three get_repo_context calls are stuck
+/// answered immediately even though three context calls are stuck
 /// inside a hung embedder.
 #[test]
 fn ping_answers_while_tool_calls_wait_on_a_hung_embedder() {
@@ -369,7 +332,7 @@ fn ping_answers_while_tool_calls_wait_on_a_hung_embedder() {
     for id in 1..=3 {
         child.send(
             &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
-            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}),
+            "params":{"name":"context","arguments":{"query":"auth rotation"}}}),
         );
     }
     std::thread::sleep(Duration::from_millis(20));
@@ -421,7 +384,7 @@ fn embed_breaker_opens_after_repeated_deadlines() {
     for id in 1..=3 {
         child.send(
             &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
-            "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}),
+            "params":{"name":"context","arguments":{"query":"auth rotation"}}}),
         );
         let sent = std::time::Instant::now();
         let response = child
@@ -438,7 +401,7 @@ fn embed_breaker_opens_after_repeated_deadlines() {
     // Breaker is open: the fourth query skips the embed entirely.
     child.send(
         &serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
-        "params":{"name":"get_repo_context","arguments":{"query":"auth rotation"}}}),
+        "params":{"name":"context","arguments":{"query":"auth rotation"}}}),
     );
     let sent = std::time::Instant::now();
     let response = child
@@ -473,8 +436,8 @@ fn worker_survives_store_open_failure_and_serves_the_next_job() {
         embed_deadline: Duration::from_secs(2),
     };
     let script = concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"repo_symbol_context\",\"arguments\":{\"symbol\":\"anything\"}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"repo_symbol_context\",\"arguments\":{\"symbol\":\"anything\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"context\",\"arguments\":{\"query\":\"anything\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"context\",\"arguments\":{\"query\":\"anything\"}}}\n",
     );
     let lines: Vec<serde_json::Value> = serve_collect(config, script)
         .lines()
@@ -512,7 +475,7 @@ fn worker_answers_follow_the_database_file_across_reindex() {
     child.send(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     child.send(
         &serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
-        "params":{"name":"repo_symbol_context","arguments":{"symbol":"refresh_session"}}}),
+        "params":{"name":"context","arguments":{"query":"refresh_session"}}}),
     );
     let initialize = child
         .read_response(Duration::from_secs(5))
@@ -560,19 +523,19 @@ fn worker_answers_follow_the_database_file_across_reindex() {
 
     child.send(
         &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
-        "params":{"name":"repo_symbol_context","arguments":{"symbol":"brand_new_symbol"}}}),
+        "params":{"name":"context","arguments":{"query":"brand_new_symbol"}}}),
     );
     let after = child
         .read_response(Duration::from_secs(5))
         .expect("post-reindex call answered");
     assert_eq!(after["id"], 3);
-    let entries: serde_json::Value =
+    let packet: serde_json::Value =
         serde_json::from_str(after["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    let list = entries.as_array().expect("array payload");
+    let items = packet["items"].as_array().expect("context packet items");
     assert!(
-        list.iter().any(|entry| entry["routing_text"]
+        items.iter().any(|item| item["evidence_text"]
             .as_str()
             .is_some_and(|text| text.contains("brand_new_symbol"))),
-        "the worker must answer from the replaced database file, not the stale inode: {list:?}"
+        "the worker must answer from the replaced database file, not the stale inode: {items:?}"
     );
 }

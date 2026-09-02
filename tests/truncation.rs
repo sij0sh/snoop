@@ -1,11 +1,9 @@
-//! Defect-audit 20260831023057-8ecdc8ca c6: anchor-lookup truncation must be
-//! visible, not silent. MCP marks the result object with `truncated: true`;
-//! the CLI prints a "+N more units not shown" notice on stderr.
+//! Anchor-lookup truncation must be visible. The CLI prints a
+//! "+N more units not shown" notice on stderr.
 
 use std::process::Command;
 
 use snoop::core::{hash_segments, AnchorKind, BuiltAnchor, BuiltUnit, SourceKind, UnitKind};
-use snoop::mcp::handle_message;
 use snoop::store::{SourceIngest, Store};
 
 fn anchored_units(symbol: &str, count: usize) -> Vec<BuiltUnit> {
@@ -40,45 +38,6 @@ fn commit_units(store: &mut Store, locator: &str, units: &[BuiltUnit]) {
             units,
         })
         .unwrap();
-}
-
-#[test]
-fn mcp_symbol_context_reports_truncation_beyond_the_display_cap() {
-    let mut store = Store::open_in_memory().unwrap();
-    store.bind_repository("/repo").unwrap();
-    commit_units(&mut store, "/repo/big.md", &anchored_units("big", 80));
-    commit_units(&mut store, "/repo/small.md", &anchored_units("small", 1));
-
-    let call = |symbol: &str, id: i64| {
-        handle_message(
-            &store,
-            None,
-            &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
-                "params":{"name":"repo_symbol_context","arguments":{"symbol":symbol}}}),
-        )
-        .unwrap()
-    };
-
-    // Over the cap: oldest page only, with the additive `truncated` flag.
-    let response = call("big", 1);
-    assert_eq!(
-        response["result"]["truncated"], true,
-        "the 80-unit lookup must be marked truncated: {response}"
-    );
-    let entries: serde_json::Value =
-        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    let list = entries.as_array().expect("bare array payload");
-    assert_eq!(list.len(), 64, "the page is capped at ANCHOR_LOOKUP_LIMIT");
-
-    // Under the cap: no truncated field at all (additive, not always-on).
-    let response = call("small", 2);
-    assert!(
-        response["result"].get("truncated").is_none(),
-        "a page within the cap must not carry the flag: {response}"
-    );
-    let entries: serde_json::Value =
-        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(entries.as_array().unwrap().len(), 1);
 }
 
 #[test]

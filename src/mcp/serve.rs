@@ -167,14 +167,6 @@ fn worker_response(
             result["degraded"] = serde_json::json!(true);
             result
         }),
-        Ok(ToolSuccess::Truncated(payload)) => result_response(id, {
-            let mut result =
-                text_result(serde_json::to_string_pretty(&payload).unwrap_or_default());
-            // Additive response field: the anchor lookup hit the display cap
-            // and only the oldest page is served (defect-audit c6).
-            result["truncated"] = serde_json::json!(true);
-            result
-        }),
         Err(ToolFailure::Usage { code, message }) => error_response(id, code, message),
         Err(ToolFailure::Error(message)) => result_response(id, {
             let mut result = text_result(message);
