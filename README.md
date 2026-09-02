@@ -1,192 +1,225 @@
 # Snoop
 
-> Give coding agents compact, evidence-grounded context from a repository's
-> code, history, documentation, and prior work.
+> Retroactive memory for coding agents.
+>
+> Snoop turns your repository's existing history into context that an agent can recall when needed.
 
-Coding agents often search the current tree but miss why code changed, where a
-symbol is discussed, or what an earlier agent already tried.
+Your repository already has a memory. It lives in the current code, the commits that shaped it, the documentation that explains it, and earlier agent sessions.
 
-## Why Snoop?
+Snoop searches all of that material together.
 
-Snoop is a local repository context compiler that joins those sources in a
-SQLite index. It returns deterministic context packets through the CLI or MCP
-without a query-time generative LLM.
+```text id="dwug3q"
+context({
+  query: "why does refresh_session rotate the token here?"
+})
+```
 
-- Keep repository evidence local in SQLite.
-- Combine current code, Markdown, text, up to 500 Git commits, and Pi session history.
-- Retrieve with lexical search and symbol anchors without configuring an
-  embedding model.
-- Add local llama.cpp embeddings for hybrid lexical and vector retrieval.
-- Cap each result by an explicit evidence token budget.
+A single question can go beyond the current code and recover how it got there.
 
-Snoop parses Rust, Python, TypeScript, TSX, JavaScript, JSX, Go, Java, C#, C,
-C++, Ruby, PHP, shell, and GDScript code, plus Godot scenes (`.tscn`) and text
-resources (`.tres`). Repository scanning respects Git ignore rules.
+## The code is only the latest chapter
 
-## Prerequisites
+Source code is usually the right place to start, but it does not always tell the whole story.
 
-Nothing for the CLI itself. Git is needed only when indexing Git history. Snoop
-installs the optional embedder itself (see "Optional embeddings").
+A strange implementation may make sense once you find the commit that introduced it. A design decision may live in Markdown. Another agent may have investigated a bug two weeks ago. An earlier implementation may explain why the obvious approach was abandoned.
+
+Snoop indexes:
+
+* current source code
+* Markdown and text
+* Git history
+* prior Pi agent sessions
+
+A repository question can draw on both its present state and its history.
+
+```text id="50gxpc"
+current code  ─────┐
+documentation ─────┤
+git history ───────┼──> repository memory ──> context
+prior sessions ────┘
+```
+
+## Memory depends on recall
+
+Creating project knowledge is relatively easy. You can write an architecture document, maintain implementation notes, record decisions, or give agents a memory file.
+
+The harder question comes later:
+
+**Will the agent retrieve the right piece when it matters?**
+
+Useful context can exist in the project and still go unused. The model may not know where to look or realize that an old decision applies to the current problem.
+
+Snoop focuses on recall. The agent asks a question about what it needs to understand:
+
+```text id="gs6omg"
+context({
+  query: "was this retry behavior intentional?"
+})
+```
+
+Snoop searches the repository's memory and returns a compact set of relevant evidence. The agent does not need to know which file contains the explanation or which commit matters.
+
+## Retroactive by design
+
+Many memory systems become useful only after installation, once you start feeding them memories. Snoop can also look backward.
+
+An existing repository already contains material such as:
+
+* years of commits
+* existing design docs
+* current source
+* previous agent sessions
+
+Snoop makes that history available without first converting it into a new knowledge format. The repository does not need to have been designed as an agent memory system.
+
+## Recall without flooding the context
+
+More memory is not automatically better. Dumping every related commit, file, note, and old session into the prompt buries the useful evidence.
+
+Snoop returns a bounded context packet. It brings back the evidence that helps answer the current question, while the rest remains available for another query.
+
+Human memory works the same way. Recall is useful because we can retrieve the relevant part without holding everything at once.
+
+## One interface
+
+Coding agents use a single command:
+
+```text id="byy3v9"
+context
+```
+
+Ask a normal repository question:
+
+```text id="smhsvy"
+context({
+  query: "where is refresh-token validation performed?"
+})
+```
+
+Ask about intent:
+
+```text id="s79ssl"
+context({
+  query: "why was retry ordering changed?"
+})
+```
+
+Ask what happened before:
+
+```text id="2drsjv"
+context({
+  query: "has this token reuse bug been investigated before?"
+})
+```
+
+Or search by name:
+
+```text id="xnfb4d"
+context({
+  query: "refresh_session"
+})
+```
+
+Each query asks Snoop to recall useful repository context, so the interface stays the same.
+
+## Local first
+
+Snoop stores repository memory locally in SQLite. It does not use a generative LLM at query time to decide what the repository says.
+
+Lexical retrieval and relationships captured during indexing work out of the box. Local embeddings can add semantic retrieval.
+
+The agent uses the same call either way:
+
+```text id="rflrxn"
+context({ query: "..." })
+```
 
 ## Install
 
-### 1. Install the CLI
+### 1. Install Snoop
 
-No Rust toolchain required — one command grabs the right build for your OS:
+macOS and Linux:
 
-```bash
-# macOS / Linux
+```bash id="c5k7z0"
 curl -fsSL https://raw.githubusercontent.com/colbymchenry/snoop/main/scripts/install.sh | sh
 ```
 
-```powershell
-# Windows (PowerShell)
+Windows PowerShell:
+
+```powershell id="ntvtck"
 irm https://raw.githubusercontent.com/colbymchenry/snoop/main/scripts/install.ps1 | iex
 ```
 
-Building from source also works: `cargo install --path .` from a checkout.
+Or build from source:
 
-### 2. Wire up your agent(s)
+```bash id="0sp10e"
+cargo install --path .
+```
 
-In a new terminal, run the installer to connect Snoop to the agents you use:
+### 2. Connect your coding agent
 
-```bash
+```bash id="wcfnho"
 snoop install
 ```
 
-Detects and auto-configures Pi, Claude Code, Cursor, Codex CLI, opencode,
-Gemini CLI, VS Code (GitHub Copilot), Windsurf, and Kiro. Every agent except
-Pi gets the `snoop mcp` server. Pi gets the extension below, which substitutes
-for the MCP server (see "Pi tools as the MCP substitute"). This is the step that connects Snoop to your agent;
-installing the CLI in step 1 does not do it on its own. It only wires up your
-agent — it does not index any code; building each project's index is the
-separate `snoop init` in step 3.
+Snoop detects and configures supported agents, including Pi, Claude Code, Cursor, Codex CLI, opencode, Gemini CLI, VS Code with GitHub Copilot, Windsurf, and Kiro.
 
-`snoop install --list` previews detection without writing anything. `snoop
-install --agent <NAME>` wires one agent even when detection misses it.
+Preview the configuration without changing anything:
 
-### 3. Initialize each project
-
-```bash
-cd your-project
-snoop init .
-snoop query "where is refresh-token validation performed?"
+```bash id="wzi3np"
+snoop install --list
 ```
 
-The query prints a JSON context packet. Add `--explain` to write selection
-diagnostics to stderr. Use `--evidence-only` to omit routing channels.
+Or configure one integration:
 
-Each database belongs to exactly one canonical repository root. Use a separate
-database for each repository. The default path is `<repository
-root>/.agents/snoop.db`. `--db <PATH>` overrides both that default and
-`SNOOP_DB`.
+```bash id="hq5y9q"
+snoop install --agent <NAME>
+```
 
-## Optional embeddings
+### 3. Initialize a repository
 
-Without an embedder, Snoop uses BM25 retrieval, anchor expansion, role-aware
-admission, deduplication, and token budgeting. `snoop status` reports a
-`"retrieval_mode"` of `"lexical+anchors"`.
+```bash id="43nemz"
+cd your-project
+snoop init .
+```
 
-To add vector channels, install a local llama.cpp embedding server once:
+Snoop can now recall the repository's existing memory. Continue using your coding agent normally.
 
-```bash
+## Optional local embeddings
+
+Embeddings are optional. To add semantic vector retrieval, run:
+
+```bash id="gvtzde"
 snoop install embedder
 ```
 
-That downloads the llama.cpp server and the Qwen3-Embedding-0.6B-Q8_0 model
-into `~/.snoop` and writes `~/.snoop/config.json`. Start the server, then
-build vectors in each indexed project:
+Snoop installs a local llama.cpp server with `Qwen3-Embedding-0.6B-Q8_0`. This adds semantic retrieval without changing the agent interface.
 
-```bash
-snoop embed
-snoop index
+## Pi and MCP
+
+Pi connects through the bundled Snoop extension. Other supported agents connect through Snoop's MCP server.
+
+Both provide the same command:
+
+```text id="mg1vcl"
+context({
+  query: "what changed around session refresh and why?"
+})
 ```
 
-Hybrid mode combines BM25 and vector results with reciprocal-rank fusion.
-`snoop status` then reports a `"retrieval_mode"` of `"hybrid"`. `SNOOP_EMBED_URL`
-and `SNOOP_EMBED_VERSION` still override `config.json` for a manually managed
-server.
-
-## Common commands
-
-```bash
-snoop index [PATH]                  # Refresh an existing index
-snoop ensure [PATH] --timeout 120   # Refresh safely for unattended use
-snoop query "question" --tokens 6000 [--exclude-session ID]
-snoop inspect symbol refresh_session [--exclude-session ID]
-snoop inspect unit 381
-snoop sessions refresh_session
-```
-
-`query` limits each source file, commit, or session to three packet items by
-default. This diversity cap prevents one source from consuming the context
-budget. Packet timestamps use compact relative or calendar dates.
-`--exclude-session` is repeatable and removes episodes already visible in the
-calling agent's context.
-
-`ensure` prints one JSON object with a `refreshed`, `up-to-date`, `timeout`,
-`locked`, or `error` status. A concurrent process reports `locked`. Every status
-except `error` exits successfully, so freshness work does not block an agent
-launch.
+Only the integration method differs.
 
 ## Configuration
 
-- `SNOOP_DB`: Database path when `--db` is absent. Unset by default; without
-  it, the database path defaults to `<repository root>/.agents/snoop.db`.
-- `SNOOP_EMBED_URL`: llama.cpp server that enables hybrid retrieval. Unset by
-  default; Snoop then reads `~/.snoop/config.json` written by `snoop install
-  embedder`.
-- `SNOOP_EMBED_VERSION`: Embedding model identifier stored with vectors.
-  Defaults to `Qwen3-Embedding-0.6B-Q8_0`.
-- `SNOOP_ENSURE_TIMEOUT`: Extension refresh budget in seconds. Defaults to
-  `120`.
-- `SNOOP_SESSIONS_ROOT`: Pi session directory. Defaults to
-  `~/.pi/agent/sessions`.
+Snoop works with its defaults. You can set these environment variables when needed:
 
-## Pi extension
+* `SNOOP_DB`: repository database path
+* `SNOOP_EMBED_URL`: embedding server
+* `SNOOP_EMBED_VERSION`: embedding model identifier
+* `SNOOP_ENSURE_TIMEOUT`: refresh budget
+* `SNOOP_SESSIONS_ROOT`: Pi session directory
 
-[`extensions/snoop-pi.ts`](extensions/snoop-pi.ts) starts a detached
-`snoop ensure` on Pi session startup, new, resume, and fork events. `snoop
-install` copies it to `~/.pi/agent/extensions/`. To install it manually, copy
-it to the user or project extension directory:
+## Why Snoop?
 
-```bash
-cp extensions/snoop-pi.ts ~/.pi/agent/extensions/
-# or: cp extensions/snoop-pi.ts .pi/extensions/
-```
+Useful knowledge often already exists in the repository. The difficult part is recalling the right piece at the right time.
 
-Set `SNOOP_ENSURE=0` to disable the trigger. Spawn failures are appended to
-`.snoop-ensure.log` in the project directory.
-
-### Pi tool as the MCP substitute
-
-The extension substitutes for the `snoop mcp` server. `snoop install` wires Pi
-through this extension only, never through MCP. The extension registers the
-same `context` capability and token-budget default. It runs `snoop query
-<query> --tokens <max_tokens>`, and both paths read the same index.
-
-The tool passes the current Pi session ID through `--exclude-session`. This
-prevents the current conversation from returning as repository evidence.
-
-The MCP server adds a worker pool and an embed deadline that degrades to
-lexical-only retrieval under load. The extension tools run one CLI process per
-call and need no server.
-
-## MCP server
-
-Run the stdio MCP server over an existing index:
-
-```bash
-snoop mcp
-```
-
-It implements JSON-RPC 2.0 and exposes one tool:
-
-- `context` accepts `query`, optional `max_tokens`, and optional
-  `exclude_sessions` IDs. It returns a token-budgeted packet across code,
-  documentation, git history, and prior agent work. Symbol queries use the
-  same retrieval pipeline and automatically expand symbol anchors.
-
-Pi sessions skip this server. The extension above provides the same tool
-through the CLI. Exact symbol inspection remains available through `snoop
-inspect symbol <symbol>`.
+Your repository has been accumulating memory since before Snoop was installed. Snoop gives your agent a way to recall it.
