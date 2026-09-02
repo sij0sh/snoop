@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -170,6 +171,7 @@ pub fn scan(
             modified_at,
         });
     }
+    scan_markdown_ignoring_git(root, &mut sources, &mut skipped);
     force_scan_cheatcodes(root, &mut sources, &mut skipped);
     sources.sort_by(|a, b| a.locator.cmp(&b.locator));
     Ok((sources, skipped))
@@ -228,6 +230,89 @@ fn force_scan_cheatcodes(root: &Path, sources: &mut Vec<ScannedSource>, skipped:
     });
 }
 
+fn scan_markdown_ignoring_git(root: &Path, sources: &mut Vec<ScannedSource>, skipped: &mut usize) {
+    let mut known: HashSet<String> = sources
+        .iter()
+        .map(|source| source.locator.clone())
+        .collect();
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .require_git(false)
+        .filter_entry(|entry| {
+            !entry.file_type().is_some_and(|kind| kind.is_dir())
+                || entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(|name| !SKIP_DIRS.contains(&name))
+        });
+    for entry in builder.build() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                *skipped += 1;
+                eprintln!("warning: skipped unreadable Markdown scan entry: {error}");
+                continue;
+            }
+        };
+        if !entry.file_type().is_some_and(|kind| kind.is_file())
+            || !matches!(classify(entry.path()), Some(SourceKind::Markdown))
+        {
+            continue;
+        }
+        let locator = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !known.insert(locator.clone()) {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                *skipped += 1;
+                eprintln!(
+                    "warning: skipped unreadable file {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        };
+        if metadata.len() > MAX_SOURCE_BYTES {
+            continue;
+        }
+        let content_hash = match hash_file(entry.path()) {
+            Ok(content_hash) => content_hash,
+            Err(error) => {
+                *skipped += 1;
+                eprintln!(
+                    "warning: skipped unreadable file {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        };
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs() as i64);
+        sources.push(ScannedSource {
+            path: entry.into_path(),
+            locator,
+            kind: SourceKind::Markdown,
+            content_hash,
+            modified_at,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,8 +327,6 @@ mod tests {
             "<!-- cheatcodes-entry {}-->\n## One\n",
         )
         .unwrap();
-        std::fs::create_dir(directory.path().join(".hidden")).unwrap();
-        std::fs::write(directory.path().join(".hidden/no.md"), "ignored").unwrap();
         let (sources, skipped) = scan(directory.path()).unwrap();
         assert_eq!(skipped, 0);
         let source = sources
@@ -251,17 +334,25 @@ mod tests {
             .find(|source| source.locator == ".agents/CHEATCODES.md")
             .expect("cheatcodes corpus is scanned despite hidden and ignore rules");
         assert_eq!(source.kind, SourceKind::Markdown);
-        assert!(sources
-            .iter()
-            .all(|source| source.locator != ".hidden/no.md"));
     }
 
     #[test]
-    fn scanner_is_stable_and_skips_hidden_files() {
+    fn markdown_ignores_git_rules_while_code_respects_them() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("README.md"), "# Hello").unwrap();
         std::fs::write(directory.path().join("ignored.md"), "ignored").unwrap();
-        std::fs::write(directory.path().join(".gitignore"), "ignored.md\n").unwrap();
+        std::fs::write(directory.path().join("ignored.rs"), "fn ignored() {}").unwrap();
+        std::fs::create_dir(directory.path().join("ignored-docs")).unwrap();
+        std::fs::write(
+            directory.path().join("ignored-docs/guide.md"),
+            "# Ignored guide",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join(".gitignore"),
+            "ignored.md\nignored.rs\nignored-docs/\n",
+        )
+        .unwrap();
         std::fs::create_dir(directory.path().join(".hidden")).unwrap();
         std::fs::write(directory.path().join(".hidden/no.md"), "ignored").unwrap();
         std::fs::create_dir(directory.path().join("target")).unwrap();
@@ -274,8 +365,21 @@ mod tests {
         let (second, second_skipped) = scan(directory.path()).unwrap();
         assert_eq!(first_skipped, 0);
         assert_eq!(second_skipped, 0);
-        assert_eq!(first.len(), 1);
+        assert_eq!(first.len(), 4);
+        assert_eq!(
+            first
+                .iter()
+                .map(|source| source.locator.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                ".hidden/no.md",
+                "README.md",
+                "ignored-docs/guide.md",
+                "ignored.md"
+            ]
+        );
         assert_eq!(first[0].locator, second[0].locator);
         assert_eq!(first[0].content_hash, second[0].content_hash);
+        assert!(first.iter().all(|source| source.locator != "ignored.rs"));
     }
 }

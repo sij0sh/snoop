@@ -175,13 +175,14 @@ fn external_client_answers_fixture_questions_through_mcp_alone() {
     std::fs::write(
         session_dir.join("2026-08-21T09-00-00-000Z_mcp-session.jsonl"),
         format!(
-            "{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n",
             format!(
                 r#"{{"type":"session","version":3,"id":"mcp-session","timestamp":"2026-08-21T09:00:00.000Z","cwd":"{}"}}"#,
                 canonical.display()
             ),
             r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-21T09:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Investigate the refresh_session rotation order"}]}}"#,
             r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-21T09:01:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The rotation ordering was deliberate to prevent stale reuse."}]}}"#,
+            r#"{"type":"compaction","id":"k1","parentId":"a1","timestamp":"2026-08-21T09:02:00.000Z"}"#,
         ),
     )
     .unwrap();

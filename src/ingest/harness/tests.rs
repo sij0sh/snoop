@@ -14,6 +14,34 @@ const SAMPLE: &str = r#"{"type":"session","version":3,"id":"s1","timestamp":"202
 {"type":"custom","id":"x1","parentId":"k1","timestamp":"2026-08-26T18:06:01.000Z","payload":{"anything":true}}
 "#;
 
+#[test]
+fn compaction_seals_only_the_completed_session_prefix() {
+    let no_compaction = format!(
+        "{}\n{}\n",
+        r#"{"type":"session","version":3,"id":"sealed","cwd":"/tmp/repo"}"#,
+        user_turn("u1", "2026-08-26T18:00:00.000Z", "still live")
+    );
+    assert!(compacted_prefix(&no_compaction).is_empty());
+
+    let once = format!(
+        "{}{}\n{}\n{}\n",
+        no_compaction,
+        r#"{"type":"compaction","id":"k1","parentId":"u1"}"#,
+        user_turn("u2", "2026-08-26T19:00:00.000Z", "live tail"),
+        r#"{"type":"custom","data":{"note":"compaction in payload"}}"#
+    );
+    let sealed = compacted_prefix(&once);
+    assert!(sealed.contains("still live"));
+    assert!(!sealed.contains("live tail"));
+    assert!(!sealed.contains("compaction in payload"));
+
+    let twice = format!(
+        "{}{}\n",
+        once, r#"{"type":"compaction","id":"k2","parentId":"u2"}"#
+    );
+    assert!(compacted_prefix(&twice).contains("live tail"));
+}
+
 fn bash_session() -> String {
     format!(
         "{}\n{}\n{}\n{}\n{}",

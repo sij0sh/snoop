@@ -175,7 +175,7 @@ const SESSION_APPEND: &[&str] = &[
 ];
 
 #[test]
-fn session_append_reembeds_only_new_episodes() {
+fn session_compaction_reembeds_only_newly_sealed_episodes() {
     let _guard = env_lock();
     let directory = tempfile::tempdir().unwrap();
     let sessions_root = tempfile::tempdir().unwrap();
@@ -189,46 +189,51 @@ fn session_append_reembeds_only_new_episodes() {
             ));
     std::fs::create_dir_all(&session_directory).unwrap();
     let session_path = session_directory.join("2026-08-20T10-00-00-000Z_inc-0001.jsonl");
-    let mut lines = vec![SESSION_HEAD[0].replace(
-        "/tmp/snoop-incremental",
-        &canonical.to_string_lossy(),
-    )];
+    let mut lines =
+        vec![SESSION_HEAD[0].replace("/tmp/snoop-incremental", &canonical.to_string_lossy())];
     lines.extend(SESSION_HEAD[1..].iter().map(|line| line.to_string()));
     std::fs::write(&session_path, lines.join("\n") + "\n").unwrap();
     std::env::set_var("SNOOP_SESSIONS_ROOT", sessions_root.path());
 
     let mut store = Store::open_in_memory().unwrap();
     let embedder = MockEmbedder::new("mock-v1");
-    let first =
-        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
-    assert_eq!(count_kind(&store, SourceKind::AgentSession), 1);
-    assert!(first.embedded > 0);
-
-    let mut appended: Vec<String> = SESSION_HEAD.iter().map(|line| line.to_string()).collect();
-    appended[0] = appended[0].replace(
-        "/tmp/snoop-incremental",
-        &canonical.to_string_lossy(),
-    );
-    appended.extend(SESSION_APPEND.iter().map(|line| line.to_string()));
-    std::fs::write(&session_path, appended.join("\n") + "\n").unwrap();
-
-    let second =
-        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
     assert_eq!(
         count_kind(&store, SourceKind::AgentSession),
-        2,
-        "appended user turn becomes a new episode"
+        0,
+        "the live session is not indexed before compaction"
     );
-    assert!(
-        second.units_reused >= 1,
-        "unchanged episode units must be reused: {:?}",
-        second
+
+    lines.push(
+        r#"{"type":"compaction","id":"k1","parentId":"a1","timestamp":"2026-08-20T10:02:00.000Z"}"#
+            .to_string(),
     );
+    std::fs::write(&session_path, lines.join("\n") + "\n").unwrap();
+    let first_compaction =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    assert_eq!(count_kind(&store, SourceKind::AgentSession), 1);
+    assert_eq!(first_compaction.embedded, 2);
+
+    lines.extend(SESSION_APPEND.iter().map(|line| line.to_string()));
+    std::fs::write(&session_path, lines.join("\n") + "\n").unwrap();
+    let live_tail =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    assert_eq!(count_kind(&store, SourceKind::AgentSession), 1);
     assert_eq!(
-        second.embedded, 2,
-        "only the new episode's evidence and routing vectors are embedded: {:?}",
-        second
+        live_tail.changed_sources, 0,
+        "live tail does not change memory"
     );
+
+    lines.push(
+        r#"{"type":"compaction","id":"k2","parentId":"a2","timestamp":"2026-08-20T10:06:00.000Z"}"#
+            .to_string(),
+    );
+    std::fs::write(&session_path, lines.join("\n") + "\n").unwrap();
+    let second_compaction =
+        index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+    assert_eq!(count_kind(&store, SourceKind::AgentSession), 2);
+    assert!(second_compaction.units_reused >= 1);
+    assert_eq!(second_compaction.embedded, 2);
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
 }

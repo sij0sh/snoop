@@ -26,7 +26,8 @@ const SESSION_LINES: &[&str] = &[
     r#"{"type":"message","id":"u2","parentId":"a2","timestamp":"2026-08-20T10:05:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Now run the auth tests"}]}}"#,
     r#"{"type":"message","id":"a3","parentId":"u2","timestamp":"2026-08-20T10:05:02.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c3","name":"bash","arguments":{"command":"cargo test auth"}}]}}"#,
     r#"{"type":"compaction","id":"k1","parentId":"a3","timestamp":"2026-08-20T10:06:00.000Z"}"#,
-    r#"{"type":"custom","id":"x9","parentId":"k1","timestamp":"2026-08-20T10:06:01.000Z","payload":{"unknown":true}}"#,
+    r#"{"type":"message","id":"u3","parentId":"k1","timestamp":"2026-08-20T10:07:00.000Z","message":{"role":"user","content":[{"type":"text","text":"current prompt must stay out of the index"}]}}"#,
+    r#"{"type":"custom","id":"x9","parentId":"u3","timestamp":"2026-08-20T10:07:01.000Z","payload":{"unknown":true}}"#,
     r#"{"type":"totally_unknown_future_type","id":"z1","parentId":"x9"}"#,
 ];
 
@@ -88,6 +89,7 @@ fn sessions_index_as_episodes_with_references_not_evidence() {
     );
 
     for unit in &episode_units {
+        assert!(!unit.evidence_text.contains("current prompt must stay out"));
         assert!(unit.locator.starts_with("pi-session:"));
         assert!(unit.evidence_text.contains("User:"));
         assert!(unit.routing_text.contains("source: agent_episode"));
@@ -241,7 +243,12 @@ fn write_session_file(directory: &Path, name: &str, session_id: &str, cwd: Optio
     let turn = format!(
         r#"{{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-20T10:01:00.000Z","message":{{"role":"user","content":[{{"type":"text","text":"Notes about {token}"}}]}}}}"#
     );
-    std::fs::write(directory.join(name), format!("{header}\n{turn}\n")).unwrap();
+    let compaction = r#"{"type":"compaction","id":"k1","parentId":"u1","timestamp":"2026-08-20T10:02:00.000Z"}"#;
+    std::fs::write(
+        directory.join(name),
+        format!("{header}\n{turn}\n{compaction}\n"),
+    )
+    .unwrap();
 }
 
 fn session_locators(store: &Store) -> Vec<String> {

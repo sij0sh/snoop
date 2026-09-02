@@ -27,7 +27,11 @@ Snoop indexes:
 * current source code
 * Markdown and text
 * Git history
-* prior Pi agent sessions
+* compacted Pi agent sessions
+
+Code and text scanning honors Git ignore rules. Markdown remains indexable even when a Git ignore rule matches it.
+
+Snoop indexes a session only through its latest compaction. This makes compacted-away work retrievable without echoing the live conversation.
 
 A repository question can draw on both its present state and its history.
 

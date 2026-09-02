@@ -21,7 +21,7 @@ use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 /// in `crate::metadata` changes its persisted shape, so existing databases
 /// rebuild every source on the next index run instead of serving old-shape
 /// rows (see the upgrade policy in `src/metadata.rs`).
-pub const INDEX_FORMAT_VERSION: &str = "phase-16";
+pub const INDEX_FORMAT_VERSION: &str = "phase-17";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed chunk and again before
@@ -337,7 +337,9 @@ fn index_repository_body(
             if bytes.len() as u64 > harness::MAX_SESSION_BYTES {
                 continue;
             }
-            let content_hash = blake3::hash(&bytes).to_hex().to_string();
+            let content = String::from_utf8_lossy(&bytes).into_owned();
+            let compacted = harness::compacted_prefix(&content);
+            let content_hash = blake3::hash(compacted.as_bytes()).to_hex().to_string();
             let step = ingest_candidate(
                 store,
                 SourceCandidate {
@@ -350,10 +352,9 @@ fn index_repository_body(
                 deadline,
                 &mut outcome,
                 |_| {
-                    let content = String::from_utf8_lossy(&bytes).into_owned();
                     Ok(Some(Produced {
                         metadata: serde_json::json!({"session": session.session_id.clone()}),
-                        units: harness::ingest_pi_session(&content, &session.session_id)?,
+                        units: harness::ingest_pi_session(compacted, &session.session_id)?,
                     }))
                 },
             )?;

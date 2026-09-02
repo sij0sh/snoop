@@ -1,8 +1,8 @@
 // snoop-pi.ts -- pre-launch repository indexing and evidence tools for pi sessions.
 //
-// On session start (startup, new, resume, fork) this spawns `snoop ensure`
-// detached in the session directory and never awaits it, so launches stay
-// instant and freshness is eventual. For a blocking pre-launch check use
+// On session start and after compaction this spawns `snoop ensure` detached
+// in the session directory and never awaits it, so launches stay instant and
+// compacted-away conversation becomes queryable. For a blocking check use
 // `snoop ensure . --timeout 30 && exec pi` instead.
 //
 // Also registers the read-only `context` tool backed by `snoop query`,
@@ -50,6 +50,29 @@ async function runSnoop(
   return text;
 }
 
+function spawnEnsure(cwd: string) {
+  if (process.env.SNOOP_ENSURE === "0") return;
+
+  const timeout = process.env.SNOOP_ENSURE_TIMEOUT || DEFAULT_TIMEOUT_SECS;
+  const logPath = join(cwd, ".snoop-ensure.log");
+  const child = spawn("snoop", ["ensure", "--timeout", timeout], {
+    cwd,
+    stdio: "ignore",
+    detached: true,
+  });
+  child.on("error", (error) => {
+    try {
+      appendFileSync(
+        logPath,
+        `${new Date().toISOString()} snoop ensure spawn failed: ${error.message}\n`,
+      );
+    } catch {
+      // A failed log write must never break a session.
+    }
+  });
+  child.unref();
+}
+
 export default function snoopPi(pi: ExtensionAPI) {
   pi.registerTool({
     name: "context",
@@ -77,8 +100,6 @@ export default function snoopPi(pi: ExtensionAPI) {
         "--tokens",
         String(params.max_tokens ?? DEFAULT_MAX_TOKENS),
       ];
-      const sessionId = ctx.sessionManager.getSessionId();
-      if (sessionId) args.push("--exclude-session", sessionId);
       const text = await runSnoop(pi, args, ctx.cwd, signal);
       return { content: [{ type: "text", text }], details: {} };
     },
@@ -86,29 +107,10 @@ export default function snoopPi(pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     // "reload" re-enters the same session; refresh once per session entry.
-    if (event.reason === "reload") return;
-    if (process.env.SNOOP_ENSURE === "0") return;
+    if (event.reason !== "reload") spawnEnsure(ctx.cwd);
+  });
 
-    const cwd = ctx.cwd;
-    const timeout = process.env.SNOOP_ENSURE_TIMEOUT || DEFAULT_TIMEOUT_SECS;
-    const logPath = join(cwd, ".snoop-ensure.log");
-
-    const child = spawn("snoop", ["ensure", "--timeout", timeout], {
-      cwd,
-      stdio: "ignore",
-      detached: true,
-    });
-    child.on("error", (error) => {
-      // Diagnosable, never silent: missing binary, permissions, spawn errors.
-      try {
-        appendFileSync(
-          logPath,
-          `${new Date().toISOString()} snoop ensure spawn failed: ${error.message}\n`,
-        );
-      } catch {
-        // A failed log write must never break a session.
-      }
-    });
-    child.unref();
+  pi.on("session_compact", async (_event, ctx) => {
+    spawnEnsure(ctx.cwd);
   });
 }

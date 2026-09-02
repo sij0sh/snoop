@@ -35,6 +35,7 @@ const SESSION_LINES: &[&str] = &[
     r#"{"type":"session","version":3,"id":"milestone-c-session","timestamp":"2026-08-21T09:00:00.000Z","cwd":"/tmp/fixture"}"#,
     r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-21T09:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Investigate the refresh_session rotation order"}]}}"#,
     r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-21T09:01:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The rotation ordering was deliberate to prevent stale reuse. I checked the retry history and database schema before concluding."},{"type":"toolCall","id":"c1","name":"read","arguments":{"path":"src/auth.rs"}}]}}"#,
+    r#"{"type":"compaction","id":"k1","parentId":"a1","timestamp":"2026-08-21T09:02:00.000Z"}"#,
 ];
 
 fn fixture(root: &Path, sessions_root: &Path) {

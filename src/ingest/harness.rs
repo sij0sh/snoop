@@ -19,6 +19,24 @@ pub const MAX_EPISODES_PER_SESSION: usize = 200;
 /// Bumped whenever the turn-to-unit policy changes so stored hashes change.
 pub const TURN_POLICY_VERSION: &str = "user-turn-v1";
 
+/// Returns the session prefix sealed by the latest successful compaction.
+/// The live tail stays out of repository memory because Pi still carries it
+/// in the active context. A session with no compaction contributes no units.
+pub fn compacted_prefix(content: &str) -> &str {
+    let mut byte_offset = 0usize;
+    let mut cutoff = 0usize;
+    for line in content.split_inclusive('\n') {
+        byte_offset += line.len();
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+            continue;
+        };
+        if entry.get("type").and_then(serde_json::Value::as_str) == Some("compaction") {
+            cutoff = byte_offset;
+        }
+    }
+    &content[..cutoff]
+}
+
 const DEFAULT_SESSIONS_ROOT: &str = ".pi/agent/sessions";
 
 pub fn session_locator(session_id: &str) -> String {
