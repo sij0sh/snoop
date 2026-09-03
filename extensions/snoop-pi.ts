@@ -12,15 +12,18 @@
 // Disable ensure: SNOOP_ENSURE=0. Budget: SNOOP_ENSURE_TIMEOUT (seconds, default 120).
 // Spawn failures are appended to .snoop-ensure.log in the project directory.
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_TIMEOUT_SECS = "120";
 const TOOL_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_TOKENS = 6_000;
+
+/** One detached ensure per project per cooldown; each launch takes a console window on Windows. */
+const RELAUNCH_COOLDOWN_MS = 30_000;
 
 interface SnoopExecResult {
   stdout: string;
@@ -50,7 +53,7 @@ async function runSnoop(
   return text;
 }
 
-function spawnEnsure(cwd: string) {
+function spawnEnsure(cwd: string, onSpawn?: (child: ChildProcess) => void) {
   if (process.env.SNOOP_ENSURE === "0") return;
 
   const timeout = process.env.SNOOP_ENSURE_TIMEOUT || DEFAULT_TIMEOUT_SECS;
@@ -59,7 +62,9 @@ function spawnEnsure(cwd: string) {
     cwd,
     stdio: "ignore",
     detached: true,
+    windowsHide: true,
   });
+  onSpawn?.(child);
   child.on("error", (error) => {
     try {
       appendFileSync(
@@ -105,12 +110,30 @@ export default function snoopPi(pi: ExtensionAPI) {
     },
   });
 
+  // Detached ensures are visible console windows on Windows; gate per project
+  // so compaction and session churn cannot stack them.
+  const active = new Set<string>();
+  const launchedAt = new Map<string, number>();
+  const spawnOnce = (cwd: string) => {
+    const key = resolve(cwd);
+    if (active.has(key)) return;
+    const previous = launchedAt.get(key);
+    if (previous !== undefined && Date.now() - previous < RELAUNCH_COOLDOWN_MS) return;
+    spawnEnsure(cwd, (child) => {
+      active.add(key);
+      launchedAt.set(key, Date.now());
+      const release = () => active.delete(key);
+      child.on("exit", release);
+      child.on("error", release);
+    });
+  };
+
   pi.on("session_start", async (event, ctx) => {
     // "reload" re-enters the same session; refresh once per session entry.
-    if (event.reason !== "reload") spawnEnsure(ctx.cwd);
+    if (event.reason !== "reload") spawnOnce(ctx.cwd);
   });
 
   pi.on("session_compact", async (_event, ctx) => {
-    spawnEnsure(ctx.cwd);
+    spawnOnce(ctx.cwd);
   });
 }
