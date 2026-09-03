@@ -221,6 +221,7 @@ Snoop works with its defaults. You can set these environment variables when need
 * `SNOOP_EMBED_VERSION`: embedding model identifier
 * `SNOOP_ENSURE_TIMEOUT`: refresh budget
 * `SNOOP_SESSIONS_ROOT`: Pi session directory
+* `SNOOP_MUSE_ROOT`: Muse session data directory (defaults to `~/.local/share/muse`); `snoop index` refreshes its sealed history
 
 ## Why Snoop?
 

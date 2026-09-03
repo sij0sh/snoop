@@ -228,6 +228,24 @@ fn make_unit(
     }
 }
 
+/// Splits an episode body only when breadcrumb plus body exceeds the unit
+/// token budget; otherwise the episode stays a single piece. Shared by the
+/// Pi and Muse session families so every episode piece honors `MAX_TOKENS`.
+pub fn split_episode_pieces(breadcrumb: &str, body: &str) -> Vec<String> {
+    if estimate_tokens(&format!("{breadcrumb}\n\n{body}")) <= MAX_TOKENS {
+        return vec![body.to_string()];
+    }
+    // Reserve room for the per-piece breadcrumb suffix so every piece
+    // stays within the token budget.
+    let max_chars = (MAX_TOKENS * 4)
+        .saturating_sub(breadcrumb.chars().count() + 18)
+        .max(1);
+    split_oversized(body, max_chars)
+        .into_iter()
+        .map(|(piece, _, _)| piece)
+        .collect()
+}
+
 pub fn split_oversized(text: &str, max_chars: usize) -> Vec<(String, usize, usize)> {
     let max_chars = max_chars.max(1);
     let mut output = Vec::new();

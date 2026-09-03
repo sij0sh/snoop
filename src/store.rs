@@ -163,6 +163,17 @@ impl Store {
         rows.collect()
     }
 
+    /// Locators of previously indexed Muse sessions. Retention reads this
+    /// when Muse discovery fails transiently so a locked or unreadable
+    /// index can never purge established `muse-session:` history.
+    pub fn muse_session_locators(&self) -> rusqlite::Result<Vec<String>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT locator FROM sources WHERE locator LIKE 'muse-session:%'")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
+
     pub fn source_by_locator(&self, locator: &str) -> rusqlite::Result<Option<Source>> {
         self.conn
             .query_row(

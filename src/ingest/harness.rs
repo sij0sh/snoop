@@ -3,9 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::core::{hash_segments, AnchorKind, BuiltAnchor, BuiltUnit, UnitKind};
-use crate::ingest::units::{estimate_tokens, split_oversized, MAX_TOKENS};
+use crate::ingest::units::estimate_tokens;
 
 mod jsonl;
+pub mod muse;
 mod tools;
 
 #[cfg(test)]
@@ -145,18 +146,7 @@ pub fn discover_sessions(
 /// Splits the turn body only when breadcrumb plus body exceeds the unit
 /// token budget; otherwise the turn stays a single piece.
 fn turn_pieces(breadcrumb: &str, body: &str) -> Vec<String> {
-    if estimate_tokens(&format!("{breadcrumb}\n\n{body}")) <= MAX_TOKENS {
-        return vec![body.to_string()];
-    }
-    // Reserve room for the per-piece breadcrumb suffix so every piece
-    // stays within the token budget.
-    let max_chars = (MAX_TOKENS * 4)
-        .saturating_sub(breadcrumb.chars().count() + 18)
-        .max(1);
-    split_oversized(body, max_chars)
-        .into_iter()
-        .map(|(piece, _, _)| piece)
-        .collect()
+    crate::ingest::units::split_episode_pieces(breadcrumb, body)
 }
 
 fn build_turn_units(turns: &[EpisodeTurn], session_id: &str) -> Vec<BuiltUnit> {

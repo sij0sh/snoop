@@ -21,7 +21,7 @@ use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 /// in `crate::metadata` changes its persisted shape, so existing databases
 /// rebuild every source on the next index run instead of serving old-shape
 /// rows (see the upgrade policy in `src/metadata.rs`).
-pub const INDEX_FORMAT_VERSION: &str = "phase-17";
+pub const INDEX_FORMAT_VERSION: &str = "phase-18";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed chunk and again before
@@ -364,6 +364,89 @@ fn index_repository_body(
         }
     }
 
+    // Muse prior-work sessions. Discovery resolves the Muse root from
+    // SNOOP_MUSE_ROOT (default ~/.local/share/muse) and attributes rows by
+    // canonical workspace root. Only a successful discovery pass declares
+    // the muse-session: locator set complete: a failed or locked index
+    // query retains previously indexed Muse sources instead of purging
+    // them below.
+    let mut muse_discovery_ok = true;
+    let muse_sessions = match harness::muse::discover_muse_sessions(&root) {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            eprintln!("warning: skipping Muse sessions after failed discovery: {error}");
+            muse_discovery_ok = false;
+            Vec::new()
+        }
+    };
+    for session in &muse_sessions {
+        if outcome.timed_out {
+            break;
+        }
+        let locator = harness::muse::muse_session_locator(&session.session_id);
+        present.insert(locator.clone());
+        // Session files live under the Muse data directory and can vanish
+        // mid-run; a read failure skips the session instead of aborting
+        // the run, matching the Pi family contract.
+        let bytes = match std::fs::read(&session.log_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!(
+                    "warning: skipped unreadable Muse session {}: {error}",
+                    session.session_id
+                );
+                outcome.skipped_sources += 1;
+                continue;
+            }
+        };
+        if bytes.len() as u64 > harness::MAX_SESSION_BYTES {
+            continue;
+        }
+        let content = String::from_utf8_lossy(&bytes).into_owned();
+        // The reader rejects unknown envelope schemas per session; the
+        // sealed hash covers only the durable-end-closed prefix.
+        let parsed = match harness::muse::read_muse_log(&content) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                eprintln!(
+                    "warning: skipped Muse session {}: {error}",
+                    session.session_id
+                );
+                outcome.skipped_sources += 1;
+                continue;
+            }
+        };
+        let Some(sealed_len) = parsed.sealed_len else {
+            // No durable end marker: the session is still live, so its
+            // current context stays out of repository memory.
+            continue;
+        };
+        let content_hash = blake3::hash(content[..sealed_len].as_bytes())
+            .to_hex()
+            .to_string();
+        let step = ingest_candidate(
+            store,
+            SourceCandidate {
+                kind: SourceKind::AgentSession,
+                locator: locator.clone(),
+                content_hash,
+                modified_at: None,
+            },
+            force_rebuild,
+            deadline,
+            &mut outcome,
+            |_| {
+                Ok(Some(Produced {
+                    metadata: harness::muse::source_metadata(session, parsed.sealed_end_sequence),
+                    units: harness::muse::sealed_units(&parsed, session),
+                }))
+            },
+        )?;
+        if matches!(step, Step::DeadlineReached) {
+            break;
+        }
+    }
+
     for source in &scanned {
         if outcome.timed_out {
             break;
@@ -457,6 +540,21 @@ fn index_repository_body(
     // version current so the next run resumes embedding instead of
     // rebuilding sources.
     if !outcome.timed_out {
+        if !muse_discovery_ok {
+            // A failed Muse discovery pass declares nothing: previously
+            // indexed Muse sources stay present so the purge below keeps
+            // serving them until discovery succeeds again.
+            match store.muse_session_locators() {
+                Ok(locators) => {
+                    for locator in locators {
+                        present.insert(locator);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("warning: could not list stored Muse sources for retention: {error}");
+                }
+            }
+        }
         outcome.deleted_sources = store.delete_sources_not_in(&present)?;
         store.set_repository_content_version(INDEX_FORMAT_VERSION)?;
     }

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::tools::{tool_ref, ToolRef};
+use super::tools::{tool_ref, upgrade_outcome_from_text, ToolOutcome, ToolRef};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct SessionEntry {
@@ -83,7 +83,7 @@ pub(super) struct EpisodeEvent {
     pub(super) end_byte: usize,
     pub(super) text: String,
     pub(super) files: Vec<String>,
-    pub(super) outcome: Option<BashOutcome>,
+    pub(super) outcome: Option<ToolOutcome>,
 }
 
 #[derive(Debug, Clone)]
@@ -176,43 +176,9 @@ impl EpisodeTurn {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct BashOutcome {
-    command: String,
-    outcome: String,
-    exit_code: Option<i64>,
-    duration_ms: Option<i64>,
-    test_counts: Option<serde_json::Value>,
-}
-
-impl BashOutcome {
-    fn unknown(command: String) -> Self {
-        Self {
-            command: command.chars().take(200).collect(),
-            outcome: "unknown".to_string(),
-            exit_code: None,
-            duration_ms: None,
-            test_counts: None,
-        }
-    }
-
-    fn to_json(&self) -> serde_json::Value {
-        let mut value = serde_json::json!({
-            "command": self.command,
-            "outcome": self.outcome,
-        });
-        if let Some(exit_code) = self.exit_code {
-            value["exit_code"] = serde_json::json!(exit_code);
-        }
-        if let Some(duration_ms) = self.duration_ms {
-            value["duration_ms"] = serde_json::json!(duration_ms);
-        }
-        if let Some(test_counts) = &self.test_counts {
-            value["test_counts"] = test_counts.clone();
-        }
-        value
-    }
-}
+/// Pi spelling of the shared call outcome. Parsing lives in
+/// `super::tools` so both session families upgrade outcomes identically.
+pub(super) use super::tools::ToolOutcome as BashOutcome;
 
 fn text_of(content: &[ContentBlock]) -> String {
     content
@@ -257,45 +223,7 @@ fn block_result_id(block: &ContentBlock) -> Option<String> {
 }
 
 fn outcome_from_payload(raw: &str, outcome: &mut BashOutcome) {
-    let trimmed = raw.trim();
-    if !trimmed.starts_with('{') {
-        return;
-    }
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return;
-    };
-    let exit = value.get("exitCode").and_then(|value| value.as_i64());
-    let duration = value.get("durationMs").and_then(|value| value.as_i64());
-    let counts = ["testsPassed", "passed", "failed", "total"]
-        .iter()
-        .filter_map(|key| {
-            value
-                .get(key)
-                .and_then(|value| value.as_u64())
-                .map(|v| (key, v))
-        })
-        .collect::<Vec<_>>();
-    if exit.is_none() && duration.is_none() && counts.is_empty() {
-        return;
-    }
-    if let Some(exit) = exit {
-        outcome.exit_code = Some(exit);
-        outcome.outcome = if exit == 0 {
-            "passed".to_string()
-        } else {
-            "failed".to_string()
-        };
-    }
-    if let Some(duration) = duration {
-        outcome.duration_ms = Some(duration);
-    }
-    if !counts.is_empty() {
-        let mut counts_json = serde_json::Map::new();
-        for (key, value) in counts {
-            counts_json.insert((*key).to_string(), serde_json::json!(value));
-        }
-        outcome.test_counts = Some(serde_json::Value::Object(counts_json));
-    }
+    upgrade_outcome_from_text(raw, outcome);
 }
 
 fn bash_outcome_from_content(
