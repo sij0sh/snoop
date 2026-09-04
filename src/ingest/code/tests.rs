@@ -3,6 +3,7 @@ mod c;
 mod c_declarator;
 mod cpp;
 mod csharp;
+mod ecmascript;
 mod gdscript;
 mod godot_resource;
 mod php;

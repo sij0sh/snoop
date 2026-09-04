@@ -1,5 +1,8 @@
 //! ECMAScript adapter (TypeScript, TSX, JavaScript, JSX): AST
-//! classification, symbols, context, and atomic ranges.
+//! classification, symbols, context, and atomic ranges. Static Tauri
+//! bridge calls (`invoke`, `emit`, `listen`) with a literal-string
+//! command become named declarations; dynamic arguments are never
+//! extracted.
 
 use std::ops::Range;
 
@@ -19,6 +22,7 @@ pub(super) fn ecmascript_interesting(node: Node<'_>, source: &str) -> Option<Ato
         "type_alias_declaration" | "enum_declaration" | "import_statement" => {
             Some(AtomKind::Declaration)
         }
+        "call_expression" => static_bridge_call(node, source).map(|_| AtomKind::Declaration),
         "variable_declarator" => node
             .child_by_field_name("value")
             .is_some_and(|value| callable_kind(value))
@@ -78,6 +82,9 @@ fn targets_exports(left: Node<'_>, source: &str) -> bool {
 }
 
 pub(super) fn ecmascript_symbol_info(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+    if node.kind() == "call_expression" {
+        return static_bridge_call(node, source);
+    }
     if node.kind() == "assignment_expression" {
         if let Some(left) = node.child_by_field_name("left") {
             let value = source[left.byte_range()].trim();
@@ -87,6 +94,51 @@ pub(super) fn ecmascript_symbol_info(node: Node<'_>, source: &str) -> Option<Sym
         }
     }
     field_symbol_info(node, source)
+}
+
+/// The display name is the bare command or event name so the symbol
+/// anchor exact-matches the Rust-side command; the breadcrumb keeps the
+/// call name for readability. Aliased imports, member callees with
+/// other names, variables, template literals, and concatenations stay
+/// unrecognized.
+fn static_bridge_call(node: Node<'_>, source: &str) -> Option<SymbolInfo> {
+    let function = node.child_by_field_name("function")?;
+    let callee = match function.kind() {
+        "identifier" => function,
+        "member_expression" => function.child_by_field_name("property")?,
+        _ => return None,
+    };
+    let call_name = source[callee.byte_range()].trim();
+    if !matches!(call_name, "invoke" | "emit" | "listen") {
+        return None;
+    }
+    let arguments = node.child_by_field_name("arguments")?;
+    let argument = arguments.named_child(0)?;
+    if argument.kind() != "string" {
+        return None;
+    }
+    let command = string_text(&source[argument.byte_range()]);
+    if command.is_empty() {
+        return None;
+    }
+    Some(SymbolInfo {
+        display_name: command.clone(),
+        qualified_component: format!("{call_name} {command}"),
+    })
+}
+
+fn string_text(literal: &str) -> String {
+    let trimmed = literal.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2 && (bytes[0] == b'"' || bytes[0] == b'\'') {
+        let quote = bytes[0] as char;
+        if let Some(body) = trimmed.strip_prefix(quote) {
+            if let Some(body) = body.strip_suffix(quote) {
+                return body.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
 }
 
 pub(super) fn ecmascript_leading_context(node: Node<'_>, source: &str) -> Option<Range<usize>> {

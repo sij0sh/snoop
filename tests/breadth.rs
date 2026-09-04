@@ -140,3 +140,76 @@ fn code_symbols_are_retrievable_across_languages() {
 
     std::env::remove_var("SNOOP_SESSIONS_ROOT");
 }
+
+#[test]
+fn tauri_bridge_commands_are_retrievable_across_the_boundary() {
+    let _guard = env_lock();
+    let directory = tempfile::tempdir().unwrap();
+    let sessions_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(directory.path().join("src-tauri/src")).unwrap();
+    std::fs::create_dir_all(directory.path().join("src")).unwrap();
+    std::fs::write(
+        directory.path().join("src-tauri/src/commands.rs"),
+        concat!(
+            "use std::fs;\n\n",
+            "/// Persists an editor file on behalf of the frontend.\n",
+            "#[tauri::command]\n",
+            "pub fn save_file(path: String, contents: String) -> bool {\n",
+            "    persist(path, contents)\n",
+            "}\n\n",
+            "fn persist(path: String, contents: String) -> bool {\n",
+            "    fs::write(path, contents).is_ok()\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("src/api.ts"),
+        concat!(
+            "import { invoke } from '@tauri-apps/api/core';\n\n",
+            "export function save(path: string, contents: string) {\n",
+            "  return invoke<boolean>('save_file', { path, contents });\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(sessions_root.path().join("empty")).unwrap();
+    std::env::set_var("SNOOP_SESSIONS_ROOT", sessions_root.path());
+
+    let mut store = Store::open_in_memory().unwrap();
+    let embedder = MockEmbedder::new("mock-v1");
+    index_repository_bounded(&mut store, directory.path(), Some(&embedder), None).unwrap();
+
+    let report = query(
+        &store,
+        Some(&embedder),
+        "where does the frontend call save_file?",
+        &QueryOptions {
+            channels: QueryChannels::for_embedder(Some(&embedder)),
+            top_n: 25,
+            max_tokens: 6_000,
+            diagnostics: false,
+            ..QueryOptions::default()
+        },
+    )
+    .unwrap();
+
+    for locator in ["src-tauri/src/commands.rs", "src/api.ts"] {
+        assert!(
+            report
+                .packet
+                .items
+                .iter()
+                .any(|item| item.source_locator == locator),
+            "save_file must surface {locator}: {:?}",
+            report
+                .packet
+                .items
+                .iter()
+                .map(|item| &item.source_locator)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    std::env::remove_var("SNOOP_SESSIONS_ROOT");
+}
