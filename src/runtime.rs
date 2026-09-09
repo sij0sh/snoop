@@ -4,14 +4,16 @@ use crate::core::{
     ContextItem, ContextPacket, ItemDiagnostics, RetrievalUnit, SelectionReason, UnitId,
 };
 use crate::inference::Embedder;
-use crate::store::{cosine, Store};
+use crate::store::Store;
 
 pub const RRF_K: u64 = 60;
 
 const NEAR_DUP_THRESHOLD: f32 = 0.985;
 const ROLE_POOL: usize = 30;
 
+mod admit;
 mod expansion;
+mod locale;
 mod facets;
 mod options;
 
@@ -211,6 +213,12 @@ pub fn query_with_vector(
             pool_with_kinds.push((*id, *rank, unit.source_kind));
         }
     }
+    // Translated sibling sources collapse to one representative per family
+    // for this query; chunks from the chosen source stay eligible.
+    let suppressed = locale::suppress_locale_siblings(&pool_with_kinds, &unit_cache, text);
+    if !suppressed.is_empty() {
+        pool_with_kinds.retain(|(id, _, _)| !suppressed.contains(id));
+    }
     let mut required_roles: Vec<&'static str> =
         facets.iter().map(|facet| preferred_role(*facet)).collect();
     required_roles.dedup();
@@ -218,71 +226,8 @@ pub fn query_with_vector(
     let mut role_vectors: HashMap<&'static str, Vec<Vec<f32>>> = HashMap::new();
     let mut admitted: Vec<i64> = Vec::new();
     let mut admitted_per_source: HashMap<i64, usize> = HashMap::new();
+    let mut admitted_git_siblings: HashMap<i64, Vec<admit::SiblingKey>> = HashMap::new();
     let mut used_tokens: usize = 0;
-    #[allow(clippy::too_many_arguments)]
-    fn admit(
-        store: &Store,
-        embedder: Option<&dyn Embedder>,
-        options: &QueryOptions,
-        id: i64,
-        role: &'static str,
-        required: bool,
-        role_vectors: &mut HashMap<&'static str, Vec<Vec<f32>>>,
-        admitted: &mut Vec<i64>,
-        admitted_per_source: &mut HashMap<i64, usize>,
-        role_assignments: &mut HashMap<i64, (String, bool)>,
-        seen_hashes: &mut HashSet<String>,
-        used_tokens: &mut usize,
-        unit_cache: &mut HashMap<i64, Option<RetrievalUnit>>,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        if admitted.contains(&id) {
-            return Ok(false);
-        }
-        let Some(unit) = cached_unit(store, unit_cache, id)? else {
-            return Ok(false);
-        };
-        if !required
-            && admitted_per_source
-                .get(&unit.source_id.0)
-                .copied()
-                .unwrap_or_default()
-                >= options.max_per_source
-        {
-            return Ok(false);
-        }
-        if !seen_hashes.insert(unit.content_hash.clone()) {
-            return Ok(false);
-        }
-        // Evidence budget: a candidate that does not fit is skipped so a
-        // later smaller candidate can still be admitted.
-        if unit.token_count > options.max_tokens.saturating_sub(*used_tokens) {
-            return Ok(false);
-        }
-        if options.channels.evidence_vector {
-            let Some(embedder) = embedder else {
-                return Ok(false);
-            };
-            let vector = store.get_vector(id, "evidence", embedder.model_version())?;
-            if vector.as_ref().is_some_and(|candidate| {
-                role_vectors.get(role).is_some_and(|kept| {
-                    kept.iter()
-                        .any(|v| cosine(candidate, v) > NEAR_DUP_THRESHOLD)
-                })
-            }) {
-                return Ok(false);
-            }
-            if let Some(vector) = vector {
-                role_vectors.entry(role).or_default().push(vector);
-            }
-        }
-        if options.diagnostics {
-            role_assignments.insert(id, (role.to_string(), required));
-        }
-        admitted.push(id);
-        *admitted_per_source.entry(unit.source_id.0).or_default() += 1;
-        *used_tokens += unit.token_count;
-        Ok(true)
-    }
 
     for role in &required_roles {
         let candidates: Vec<i64> = pool_with_kinds
@@ -291,7 +236,7 @@ pub fn query_with_vector(
             .map(|(id, _, _)| *id)
             .collect();
         for id in candidates {
-            if admit(
+            if admit::admit(
                 store,
                 embedder,
                 options,
@@ -301,6 +246,7 @@ pub fn query_with_vector(
                 &mut role_vectors,
                 &mut admitted,
                 &mut admitted_per_source,
+                &mut admitted_git_siblings,
                 &mut role_assignments,
                 &mut seen_hashes,
                 &mut used_tokens,
@@ -325,7 +271,7 @@ pub fn query_with_vector(
             if role_of_kind(*kind) != role {
                 continue;
             }
-            if admit(
+            if admit::admit(
                 store,
                 embedder,
                 options,
@@ -335,6 +281,7 @@ pub fn query_with_vector(
                 &mut role_vectors,
                 &mut admitted,
                 &mut admitted_per_source,
+                &mut admitted_git_siblings,
                 &mut role_assignments,
                 &mut seen_hashes,
                 &mut used_tokens,
@@ -351,7 +298,7 @@ pub fn query_with_vector(
         if admitted.contains(&id) {
             continue;
         }
-        admit(
+        admit::admit(
             store,
             embedder,
             options,
@@ -361,6 +308,7 @@ pub fn query_with_vector(
             &mut role_vectors,
             &mut admitted,
             &mut admitted_per_source,
+            &mut admitted_git_siblings,
             &mut role_assignments,
             &mut seen_hashes,
             &mut used_tokens,
@@ -456,5 +404,7 @@ pub fn query_with_vector(
     })
 }
 
+#[cfg(test)]
+mod regression;
 #[cfg(test)]
 mod tests;

@@ -58,6 +58,7 @@ pub struct QueryOptions {
     pub exclude_unit_ids: HashSet<i64>,
     pub now: i64,
     pub max_per_source: usize,
+    pub max_units_per_git_commit: usize,
 }
 
 impl Default for QueryOptions {
@@ -72,6 +73,7 @@ impl Default for QueryOptions {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_secs() as i64),
             max_per_source: 3,
+            max_units_per_git_commit: 2,
         }
     }
 }
