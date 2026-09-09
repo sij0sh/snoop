@@ -14,6 +14,7 @@ const ROLE_POOL: usize = 30;
 mod admit;
 mod expansion;
 mod locale;
+mod relevance;
 mod facets;
 mod options;
 
@@ -222,6 +223,14 @@ pub fn query_with_vector(
     let mut required_roles: Vec<&'static str> =
         facets.iter().map(|facet| preferred_role(*facet)).collect();
     required_roles.dedup();
+    // Supporting lanes admit only credible candidates; required lanes stay
+    // permissive and fill is ungated, so recall rests on those two paths.
+    let concepts = relevance::query_concepts(text);
+    let expanded_ids: HashSet<i64> = selection_order
+        .iter()
+        .filter(|(_, _, _, reasons)| reasons.is_some())
+        .map(|(id, _, _, _)| *id)
+        .collect();
 
     let mut role_vectors: HashMap<&'static str, Vec<Vec<f32>>> = HashMap::new();
     let mut admitted: Vec<i64> = Vec::new();
@@ -269,6 +278,12 @@ pub fn query_with_vector(
     for role in supporting_roles {
         for (id, _, kind) in &pool_with_kinds {
             if role_of_kind(*kind) != role {
+                continue;
+            }
+            let Some(unit) = cached_unit(store, &mut unit_cache, *id)? else {
+                continue;
+            };
+            if !relevance::credible(&unit, &concepts, expanded_ids.contains(id)) {
                 continue;
             }
             if admit::admit(
