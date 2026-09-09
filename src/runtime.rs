@@ -223,8 +223,8 @@ pub fn query_with_vector(
     let mut required_roles: Vec<&'static str> =
         facets.iter().map(|facet| preferred_role(*facet)).collect();
     required_roles.dedup();
-    // Supporting lanes admit only credible candidates; required lanes stay
-    // permissive and fill is ungated, so recall rests on those two paths.
+    // Supporting lanes and fill admit only credible candidates; required
+    // lanes stay permissive, so recall rests on that path.
     let concepts = relevance::query_concepts(text);
     let expanded_ids: HashSet<i64> = selection_order
         .iter()
@@ -312,6 +312,18 @@ pub fn query_with_vector(
     for (id, _, kind) in fill_order {
         if admitted.contains(&id) {
             continue;
+        }
+        // Fill gating applies to history only. Commit floods were the
+        // observed failure; code and docs keep rank-ordered admission
+        // because thin lexical matches there are cheap recall insurance
+        // (A5: gating all kinds dropped task-critical routing.py).
+        if kind == crate::core::SourceKind::GitCommit {
+            let Some(unit) = cached_unit(store, &mut unit_cache, id)? else {
+                continue;
+            };
+            if !relevance::credible(&unit, &concepts, expanded_ids.contains(&id)) {
+                continue;
+            }
         }
         admit::admit(
             store,

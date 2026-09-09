@@ -4,6 +4,15 @@
 
 use crate::core::RetrievalUnit;
 
+/// Heuristic English stopwords for coverage counting. Intent words double
+/// as facet signals elsewhere; here they would let any unit match on filler.
+const STOPWORDS: &[&str] = &[
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "from",
+    "into", "over", "after", "before", "between", "through", "does", "do", "is",
+    "are", "was", "were", "be", "been", "how", "what", "when", "where", "which",
+    "why", "who", "find", "show", "get", "all", "any", "use", "using", "need",
+];
+
 /// One query concept. Compound identifiers stay whole: `cache_hits` is a
 /// single concept with raw `cache_hits` and pieces `[cache, hits]`, so
 /// identifier specificity survives FTS tokenization instead of degrading
@@ -34,6 +43,9 @@ pub(crate) fn query_concepts(text: &str) -> Vec<Concept> {
         if pieces.is_empty() {
             continue;
         }
+        if STOPWORDS.contains(&raw.as_str()) {
+            continue;
+        }
         // Camel detection reads the original token; lowering erases humps.
         let is_identifier = token.contains(['_', '-', '.']) || has_camel_hump(token);
         if !concepts.iter().any(|concept: &Concept| concept.raw == raw) {
@@ -47,22 +59,34 @@ pub(crate) fn query_concepts(text: &str) -> Vec<Concept> {
     concepts
 }
 
-fn concept_matches(concept: &Concept, haystack: &str) -> bool {
-    if haystack.contains(&concept.raw) {
-        return true;
+/// Plain words match whole-word only, so `headers` never matches `head`.
+/// Separator-bearing raws keep a substring check (`cache_hits` cannot
+/// word-match) with a word-exact all-pieces fallback (`force rescan`).
+fn concept_matches(
+    concept: &Concept,
+    words: &std::collections::HashSet<&str>,
+    haystack: &str,
+) -> bool {
+    if concept
+        .raw
+        .contains(|character: char| !character.is_alphanumeric())
+    {
+        return haystack.contains(&concept.raw)
+            || concept
+                .pieces
+                .iter()
+                .all(|piece| words.contains(piece.as_str()));
     }
-    // Separator-insensitive fallback: `force-rescan` matches `force rescan`.
-    // Every piece must be present so one generic piece never matches alone.
-    concept
-        .pieces
-        .iter()
-        .all(|piece| haystack.contains(piece))
+    words.contains(concept.raw.as_str())
 }
 
-/// A supporting candidate is credible with a strong identifier hit, two
-/// matched concepts, or an accepted anchor expansion. Mere multi-channel
-/// agreement is not enough: one generic token surfacing in both the evidence
-/// and routing representations is still one generic token.
+/// A supporting or fill candidate is credible with a strong identifier hit,
+/// enough matched concepts, or an accepted anchor expansion. Mere
+/// multi-channel agreement is not enough: one generic token surfacing in
+/// both the evidence and routing representations is still one generic token.
+/// The coverage bar adapts to query length: a one-concept query cannot
+/// discriminate by coverage, so any match stays credible and single-token
+/// queries keep their legacy behavior.
 pub(crate) fn credible(
     unit: &RetrievalUnit,
     concepts: &[Concept],
@@ -72,17 +96,21 @@ pub(crate) fn credible(
         return true;
     }
     let haystack = format!("{}\n{}", unit.evidence_text, unit.routing_text).to_lowercase();
-    if concepts
-        .iter()
-        .any(|concept| concept.is_identifier && concept_matches(concept, &haystack))
-    {
+    let words: std::collections::HashSet<&str> = haystack
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if concepts.iter().any(|concept| {
+        concept.is_identifier && concept_matches(concept, &words, &haystack)
+    }) {
         return true;
     }
+    let needed = concepts.len().min(2);
     concepts
         .iter()
-        .filter(|concept| concept_matches(concept, &haystack))
+        .filter(|concept| concept_matches(concept, &words, &haystack))
         .count()
-        >= 2
+        >= needed
 }
 
 #[cfg(test)]
@@ -128,6 +156,28 @@ mod tests {
             metadata: serde_json::json!({}),
         };
         assert!(!credible(&unit, &concepts, false));
+    }
+
+    #[test]
+    fn stopwords_leave_concepts_and_plain_words_match_whole() {
+        let concepts = query_concepts("find the CLI entry point");
+        let raws: Vec<&str> = concepts.iter().map(|concept| concept.raw.as_str()).collect();
+        assert_eq!(raws, vec!["cli", "entry", "point"]);
+        let unit = RetrievalUnit {
+            id: crate::core::UnitId(4),
+            source_id: crate::core::SourceId(4),
+            source_kind: crate::core::SourceKind::GitCommit,
+            locator: "git:headers".to_string(),
+            kind: crate::core::UnitKind::Git,
+            evidence_text: "fix response headers handling".to_string(),
+            routing_text: String::new(),
+            token_count: 10,
+            content_hash: "hash".to_string(),
+            timestamp: None,
+            metadata: serde_json::json!({}),
+        };
+        let head_only = query_concepts("implicit HEAD handling");
+        assert!(!credible(&unit, &head_only, false));
     }
 
     #[test]

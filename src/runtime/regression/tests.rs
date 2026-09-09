@@ -198,7 +198,7 @@ fn greenfield_query_keeps_strong_code_evidence() {
             &[git_unit(
                 &sha,
                 "tune cache sizes",
-                "src/cache.py",
+                &format!("src/cache{index}.py"),
                 None,
                 "adjust default cache limits",
             )],
@@ -221,10 +221,9 @@ fn greenfield_query_keeps_strong_code_evidence() {
     );
 }
 
-// N2 junk gate: ignored until Phase D/E condition supporting lanes and
-// fill. Fails today because junk fills both.
+// N2 junk gate: supporting lanes (Phase D) and fill (Phase E) both require
+// relevance, so generic single-concept commits reach neither.
 #[test]
-#[ignore = "Phase D/E: supporting-lane and fill relevance gating"]
 fn greenfield_query_excludes_generic_commit_noise() {
     let mut store = Store::open_in_memory().unwrap();
     store.bind_repository("/repo").unwrap();
@@ -250,7 +249,7 @@ fn greenfield_query_excludes_generic_commit_noise() {
             &[git_unit(
                 &sha,
                 "tune cache sizes",
-                "src/cache.py",
+                &format!("src/cache{index}.py"),
                 None,
                 "adjust default cache limits",
             )],
