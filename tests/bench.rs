@@ -338,17 +338,16 @@ fn configs() -> Vec<Config> {
             channels: QueryChannels::evidence_only(),
         },
         Config {
-            name: "C: four sources, single representation",
-            channels: QueryChannels::evidence_only(),
+            name: "C: four channels, lexical only",
+            channels: QueryChannels::for_embedder(None),
         },
         Config {
-            name: "D: four sources, dual representation",
+            name: "D: four channels, with vectors",
             channels: QueryChannels::for_embedder(Some(&MockEmbedder::new("mock-v1"))),
         },
-        Config {
-            name: "E: D + role-aware admission",
-            channels: QueryChannels::for_embedder(Some(&MockEmbedder::new("mock-v1"))),
-        },
+        // No E: role-aware admission has no channel toggle, so a fifth
+        // channel config cannot ablate it. Re-add E only with an admission
+        // option to vary.
     ]
 }
 
