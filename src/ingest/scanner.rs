@@ -163,6 +163,7 @@ pub fn scan(
         }
         if is_suppressed_hindsight_artifact(&locator)
             || is_suppressed_engineering_view(root, &locator, ledger_present)
+            || is_suppressed_decommissioned_cheatcodes(&locator)
         {
             continue;
         }
@@ -208,7 +209,6 @@ pub fn scan(
         });
     }
     scan_markdown_ignoring_git(root, &mut sources, &mut skipped, ledger_present);
-    force_scan_cheatcodes(root, &mut sources, &mut skipped);
     force_scan_hindsight_ledger(root, &mut sources, &mut skipped);
     sources.sort_by(|a, b| a.locator.cmp(&b.locator));
     Ok((sources, skipped))
@@ -258,57 +258,11 @@ fn force_scan_hindsight_ledger(root: &Path, sources: &mut Vec<ScannedSource>, sk
     });
 }
 
-/// The cheatcodes knowledge corpus is machine-local agent state that is
-/// typically hidden and gitignored; scan it explicitly when present so the
-/// conditional chunker (ingest::cheatcodes) can index it.
-///
-/// Single owner of the corpus locator: the ingest router keys the entry
-/// chunker on this constant, so content sniffing never decides routing
-/// (defect-audit 20260901192001-22ddf0a5).
-pub const CHEATCODES_LOCATOR: &str = ".agents/CHEATCODES.md";
-
-fn force_scan_cheatcodes(root: &Path, sources: &mut Vec<ScannedSource>, skipped: &mut usize) {
-    let path = root.join(".agents").join("CHEATCODES.md");
-    if !path.is_file() {
-        return;
-    }
-    let locator = CHEATCODES_LOCATOR;
-    if sources
-        .iter()
-        .any(|source| source.locator == locator)
-    {
-        return;
-    }
-    let Ok(metadata) = path.metadata() else {
-        *skipped += 1;
-        return;
-    };
-    if metadata.len() > MAX_SOURCE_BYTES {
-        return;
-    }
-    let content_hash = match hash_file(&path) {
-        Ok(content_hash) => content_hash,
-        Err(error) => {
-            *skipped += 1;
-            eprintln!(
-                "warning: skipped unreadable file {}: {error}",
-                path.display()
-            );
-            return;
-        }
-    };
-    let modified_at = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as i64);
-    sources.push(ScannedSource {
-        path,
-        locator: locator.to_string(),
-        kind: SourceKind::Markdown,
-        content_hash,
-        modified_at,
-    });
+/// The CHEATCODES project is decommissioned: its former knowledge corpus
+/// (`.agents/CHEATCODES.md`) is never indexed, not even as generic Markdown,
+/// so no special-case scanner, router, or chunker path can resurrect it.
+fn is_suppressed_decommissioned_cheatcodes(locator: &str) -> bool {
+    locator == ".agents/CHEATCODES.md"
 }
 
 fn scan_markdown_ignoring_git(
@@ -361,6 +315,7 @@ fn scan_markdown_ignoring_git(
         // too, before the generic Markdown pass finishes.
         if is_suppressed_hindsight_artifact(&locator)
             || is_suppressed_engineering_view(root, &locator, ledger_present)
+            || is_suppressed_decommissioned_cheatcodes(&locator)
         {
             continue;
         }
@@ -447,7 +402,6 @@ mod tests {
             "run report\n",
         )
         .unwrap();
-        std::fs::write(root.join(".agents/CHEATCODES.md"), "# Notes\n").unwrap();
         directory
     }
 
@@ -476,8 +430,8 @@ mod tests {
             );
         }
         assert!(
-            locators.contains(&".agents/CHEATCODES.md"),
-            "legitimate .agents content keeps normal ingestion: {locators:?}"
+            !locators.contains(&".agents/CHEATCODES.md"),
+            "decommissioned CHEATCODES corpus must never reach ingestion: {locators:?}"
         );
     }
 
@@ -506,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn scans_the_gitignored_cheatcodes_knowledge_file() {
+    fn decommissioned_cheatcodes_corpus_is_never_indexed() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join(".gitignore"), ".agents/\n").unwrap();
         std::fs::create_dir(directory.path().join(".agents")).unwrap();
@@ -515,13 +469,15 @@ mod tests {
             "<!-- cheatcodes-entry {}-->\n## One\n",
         )
         .unwrap();
-        let (sources, skipped) = scan(directory.path()).unwrap();
-        assert_eq!(skipped, 0);
-        let source = sources
+        let (sources, _) = scan(directory.path()).unwrap();
+        let locators: Vec<&str> = sources
             .iter()
-            .find(|source| source.locator == ".agents/CHEATCODES.md")
-            .expect("cheatcodes corpus is scanned despite hidden and ignore rules");
-        assert_eq!(source.kind, SourceKind::Markdown);
+            .map(|source| source.locator.as_str())
+            .collect();
+        assert!(
+            !locators.contains(&".agents/CHEATCODES.md"),
+            "decommissioned corpus must stay suppressed even when present: {locators:?}"
+        );
     }
 
     #[test]

@@ -7,8 +7,7 @@
 //! memory record, even when the record projects into several domains.
 //!
 //! Single owner of the ledger locator: the scanner force-scans this path
-//! and routes it here, so content sniffing never decides routing (the same
-//! pattern as the cheatcodes corpus).
+//! and routes it here, so content sniffing never decides routing.
 
 use std::path::{Path, PathBuf};
 
