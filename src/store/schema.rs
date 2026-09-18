@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use super::StoreOpenError;
 
 /// user_version of the schema below. Any other value is refused at open.
-pub(super) const SCHEMA_USER_VERSION: i64 = 3;
+pub(super) const SCHEMA_USER_VERSION: i64 = 4;
 
 // Fresh databases start here directly: one repository per database.
 // A database at any other user_version is refused with delete-and-reindex
@@ -89,7 +89,7 @@ CREATE TABLE index_runs (
 
 CREATE TABLE anchors (
     id INTEGER PRIMARY KEY,
-    kind TEXT NOT NULL CHECK(kind IN ('file','symbol','commit','session')),
+    kind TEXT NOT NULL CHECK(kind IN ('file','symbol','commit','session','memory')),
     value TEXT NOT NULL,
     UNIQUE(kind, value)
 );

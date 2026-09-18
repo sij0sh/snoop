@@ -49,6 +49,29 @@ impl QueryChannels {
     }
 }
 
+/// Hindsight lifecycle visibility for one query. Lifecycle is a filter
+/// before it is a weight: ineligible records never reach candidate
+/// selection, so a strong lexical match cannot surface stale material as
+/// apparent current truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HindsightVisibility {
+    Default,
+    IncludeHistory,
+    IncludeReview,
+    IncludeAll,
+}
+
+impl HindsightVisibility {
+    pub fn allowed_tiers(self) -> &'static [&'static str] {
+        match self {
+            Self::Default => &["default"],
+            Self::IncludeHistory => &["default", "history"],
+            Self::IncludeReview => &["default", "review"],
+            Self::IncludeAll => &["default", "history", "review"],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QueryOptions {
     pub channels: QueryChannels,
@@ -59,6 +82,10 @@ pub struct QueryOptions {
     pub now: i64,
     pub max_per_source: usize,
     pub max_units_per_git_commit: usize,
+    /// Family cap for curated memory: all Hindsight records share one
+    /// ledger source, so the physical per-source cap cannot apply. Several
+    /// related constraints/scars may appear without consuming the packet.
+    pub max_hindsight_items: usize,
 }
 
 impl Default for QueryOptions {
@@ -74,6 +101,7 @@ impl Default for QueryOptions {
                 .map_or(0, |duration| duration.as_secs() as i64),
             max_per_source: 3,
             max_units_per_git_commit: 2,
+            max_hindsight_items: 5,
         }
     }
 }

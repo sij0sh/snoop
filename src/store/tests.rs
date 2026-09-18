@@ -1,3 +1,4 @@
+use super::schema::SCHEMA_USER_VERSION;
 use super::*;
 use crate::core::{AnchorKind, BuiltAnchor, BuiltUnit, ResolvedAnchor, SourceKind, UnitKind};
 use crate::ingest::{index_repository_bounded, LockedError};
@@ -49,7 +50,7 @@ fn migrate_is_idempotent_and_vec_loads() {
         .connection()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, SCHEMA_USER_VERSION);
     let busy_timeout: i64 = store
         .connection()
         .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
@@ -311,7 +312,7 @@ fn concurrent_open_of_a_shared_fresh_database_succeeds() {
         .connection()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, SCHEMA_USER_VERSION);
 }
 
 #[test]

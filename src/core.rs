@@ -14,6 +14,7 @@ pub enum SourceKind {
     Text,
     GitCommit,
     AgentSession,
+    HindsightMemory,
 }
 
 impl SourceKind {
@@ -24,6 +25,7 @@ impl SourceKind {
             Self::Text => "text",
             Self::GitCommit => "git_commit",
             Self::AgentSession => "agent_session",
+            Self::HindsightMemory => "hindsight_memory",
         }
     }
 
@@ -34,6 +36,7 @@ impl SourceKind {
             "text" => Some(Self::Text),
             "git_commit" => Some(Self::GitCommit),
             "agent_session" => Some(Self::AgentSession),
+            "hindsight_memory" => Some(Self::HindsightMemory),
             _ => None,
         }
     }
@@ -149,6 +152,7 @@ pub enum UnitKind {
     Code,
     Git,
     Episode,
+    Memory,
 }
 
 impl UnitKind {
@@ -158,6 +162,7 @@ impl UnitKind {
             Self::Code => "code",
             Self::Git => "git",
             Self::Episode => "episode",
+            Self::Memory => "memory",
         }
     }
 
@@ -167,6 +172,7 @@ impl UnitKind {
             "code" => Some(Self::Code),
             "git" => Some(Self::Git),
             "episode" => Some(Self::Episode),
+            "memory" => Some(Self::Memory),
             _ => None,
         }
     }
@@ -178,6 +184,7 @@ pub enum AnchorKind {
     Symbol,
     Commit,
     Session,
+    Memory,
 }
 
 impl AnchorKind {
@@ -187,6 +194,7 @@ impl AnchorKind {
             Self::Symbol => "symbol",
             Self::Commit => "commit",
             Self::Session => "session",
+            Self::Memory => "memory",
         }
     }
 
@@ -196,6 +204,7 @@ impl AnchorKind {
             "symbol" => Some(Self::Symbol),
             "commit" => Some(Self::Commit),
             "session" => Some(Self::Session),
+            "memory" => Some(Self::Memory),
             _ => None,
         }
     }
@@ -250,6 +259,10 @@ pub enum SelectionReason {
     RrfRank(u32),
     AnchorExpansion(String, String, i64),
     RoleAware(String, bool),
+    HindsightStatus(String),
+    HindsightConfidence(String, f64),
+    HindsightLifecycleExpansion(String),
+    HindsightScopeMatch(String),
 }
 
 /// Lean item rendered into every packet: no provenance.

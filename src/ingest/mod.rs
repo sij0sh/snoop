@@ -4,6 +4,7 @@ pub mod cheatcodes;
 pub mod code;
 pub mod git;
 pub mod harness;
+pub mod hindsight;
 pub mod markdown;
 pub mod scanner;
 pub mod text;
@@ -21,7 +22,7 @@ use crate::store::{IndexRunStats, IndexRunStatus, SourceIngest, Store};
 /// in `crate::metadata` changes its persisted shape, so existing databases
 /// rebuild every source on the next index run instead of serving old-shape
 /// rows (see the upgrade policy in `src/metadata.rs`).
-pub const INDEX_FORMAT_VERSION: &str = "phase-18";
+pub const INDEX_FORMAT_VERSION: &str = "phase-19";
 
 /// Operation-owned index lease TTL in seconds.
 /// The operation renews the lease before every embed chunk and again before
@@ -522,6 +523,25 @@ fn index_repository_body(
                         source.kind,
                         &source.locator,
                     ),
+                    SourceKind::HindsightMemory => {
+                        // Fail closed: a present-but-unusable canonical
+                        // ledger warns loudly and indexes nothing. The
+                        // scanner already suppressed the generated views,
+                        // so there is no silent fallback to weaker,
+                        // potentially stale projections.
+                        match hindsight::ingest_ledger(&content) {
+                            Ok(units) => units,
+                            Err(error) => {
+                                eprintln!(
+                                    "warning: Hindsight memory ledger is present but \
+                                     unsupported/invalid; Hindsight-generated projections \
+                                     were not indexed ({error})",
+                                );
+                                outcome.skipped_sources += 1;
+                                return Ok(None);
+                            }
+                        }
+                    }
                     SourceKind::GitCommit | SourceKind::AgentSession => unreachable!(),
                 };
                 Ok(Some(Produced {

@@ -45,6 +45,7 @@ pub(crate) fn admit(
     seen_hashes: &mut HashSet<String>,
     used_tokens: &mut usize,
     unit_cache: &mut HashMap<i64, Option<RetrievalUnit>>,
+    hindsight_admitted: &mut usize,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     if admitted.contains(&id) {
         return Ok(false);
@@ -52,7 +53,15 @@ pub(crate) fn admit(
     let Some(unit) = cached_unit(store, unit_cache, id)? else {
         return Ok(false);
     };
-    if !required
+    // All Hindsight records share one ledger source, so the physical
+    // per-source cap cannot apply to them. The semantic family cap
+    // applies instead, on required lanes too: curated memory must never
+    // consume the whole packet.
+    if unit.source_kind == SourceKind::HindsightMemory {
+        if *hindsight_admitted >= options.max_hindsight_items {
+            return Ok(false);
+        }
+    } else if !required
         && admitted_per_source
             .get(&unit.source_id.0)
             .copied()
@@ -108,6 +117,9 @@ pub(crate) fn admit(
     }
     if options.diagnostics {
         role_assignments.insert(id, (role.to_string(), required));
+    }
+    if unit.source_kind == SourceKind::HindsightMemory {
+        *hindsight_admitted += 1;
     }
     admitted.push(id);
     if let Some(key) = key {

@@ -19,8 +19,8 @@ mod facets;
 mod options;
 
 use expansion::plan_expansion;
-use facets::{detect_facets, preferred_role, role_of_kind};
-pub use options::{QueryChannels, QueryOptions};
+use facets::{detect_facets, hindsight_visibility, preferred_roles, role_of_kind};
+pub use options::{HindsightVisibility, QueryChannels, QueryOptions};
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DebugReport {
     pub evidence_lexical: Vec<(i64, f64)>,
@@ -116,14 +116,19 @@ pub fn query_with_vector(
     if (options.channels.evidence_vector || options.channels.routing_vector) && embedder.is_none() {
         return Err("vector channels require a configured embedder".into());
     }
+    // Facets first: the Hindsight lifecycle filter must operate at channel
+    // candidate selection, before any top-N truncation.
+    let early_facets = detect_facets(text);
+    let visibility = hindsight_visibility(&early_facets);
+    let allowed_tiers = visibility.allowed_tiers();
     let channel_limit = options.top_n.saturating_add(options.exclude_unit_ids.len());
     let mut evidence_lexical = if options.channels.evidence_lexical {
-        store.fts_search("evidence_text", text, channel_limit)?
+        store.fts_search_hindsight("evidence_text", text, channel_limit, allowed_tiers)?
     } else {
         Vec::new()
     };
     let mut routing_lexical = if options.channels.routing_lexical {
-        store.fts_search("routing_text", text, channel_limit)?
+        store.fts_search_hindsight("routing_text", text, channel_limit, allowed_tiers)?
     } else {
         Vec::new()
     };
@@ -136,21 +141,23 @@ pub fn query_with_vector(
         None
     };
     let mut evidence_vector = if options.channels.evidence_vector {
-        store.top_k_cosine(
+        store.top_k_cosine_hindsight(
             "evidence",
             embedder.unwrap().model_version(),
             query_vector.as_deref().unwrap_or_default(),
             channel_limit,
+            allowed_tiers,
         )?
     } else {
         Vec::new()
     };
     let mut routing_vector = if options.channels.routing_vector {
-        store.top_k_cosine(
+        store.top_k_cosine_hindsight(
             "routing",
             embedder.unwrap().model_version(),
             query_vector.as_deref().unwrap_or_default(),
             channel_limit,
+            allowed_tiers,
         )?
     } else {
         Vec::new()
@@ -182,12 +189,64 @@ pub fn query_with_vector(
     if options.channels.routing_vector {
         enabled.push(routing_vector_ids.clone());
     }
-    let fused = rrf_fuse(&enabled, RRF_K);
+    let mut fused = rrf_fuse(&enabled, RRF_K);
+
+    // Hindsight confidence prior: a modest rerank inside the currently
+    // eligible lifecycle class, after the mandatory status filter and
+    // before expansion. Status always dominates confidence — a superseded
+    // authoritative record never outranks an active strong one for an
+    // ordinary query, because the former never reaches this point.
+    let mut unit_cache: HashMap<i64, Option<RetrievalUnit>> = HashMap::new();
+    let mut hindsight_reasons: HashMap<i64, Vec<SelectionReason>> = HashMap::new();
+    const SCOPE_MATCH_BONUS: f64 = 0.01;
+    const SCAR_REMOVAL_REVIEW_PENALTY: f64 = 0.95;
+    let query_lower = text.to_lowercase();
+    for entry in fused.iter_mut() {
+        let Some(unit) = cached_unit(store, &mut unit_cache, entry.0)? else {
+            continue;
+        };
+        if unit.source_kind != crate::core::SourceKind::HindsightMemory {
+            continue;
+        }
+        let metadata = &unit.metadata;
+        let confidence = crate::metadata::hindsight::confidence(metadata).unwrap_or_default();
+        let status = crate::metadata::hindsight::status(metadata).unwrap_or_default();
+        let mut multiplier = crate::ingest::hindsight::confidence_multiplier(&confidence);
+        if crate::metadata::hindsight::kind(metadata).as_deref() == Some("scar")
+            && crate::metadata::hindsight::scar_state(metadata).as_deref()
+                == Some("candidate_for_removal")
+        {
+            // Still default-retrievable: removal signals request
+            // inspection, not retirement. A small penalty only.
+            multiplier *= SCAR_REMOVAL_REVIEW_PENALTY;
+        }
+        entry.1 *= multiplier;
+        let mut reasons = vec![
+            SelectionReason::HindsightStatus(status),
+            SelectionReason::HindsightConfidence(confidence, multiplier),
+        ];
+        for path in crate::metadata::hindsight::scope_paths(metadata) {
+            let stem = path.trim_end_matches("/**").trim_end_matches("/*");
+            if stem.len() >= 3 && stem.contains('/') && query_lower.contains(&stem.to_lowercase()) {
+                entry.1 += SCOPE_MATCH_BONUS;
+                reasons.push(SelectionReason::HindsightScopeMatch(stem.to_string()));
+                break;
+            }
+        }
+        hindsight_reasons.insert(entry.0, reasons);
+    }
+    fused.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    for (index, item) in fused.iter_mut().enumerate() {
+        item.2 = index as u32 + 1;
+    }
 
     let mut items = Vec::new();
     let mut item_diagnostics: Vec<ItemDiagnostics> = Vec::new();
     let mut seen_hashes: HashSet<String> = HashSet::new();
-    let mut unit_cache: HashMap<i64, Option<RetrievalUnit>> = HashMap::new();
 
     let expansion = plan_expansion(
         store,
@@ -195,6 +254,7 @@ pub fn query_with_vector(
         text,
         options.diagnostics,
         &options.exclude_unit_ids,
+        allowed_tiers,
     )?;
     let selection_order = expansion.selection_order;
     let expansion_debug = expansion.debug;
@@ -207,7 +267,6 @@ pub fn query_with_vector(
         .take(ROLE_POOL)
         .map(|(id, _, rank, _)| (*id, rank.unwrap_or(u32::MAX)))
         .collect();
-    let facets = detect_facets(text);
     let mut pool_with_kinds: Vec<(i64, u32, crate::core::SourceKind)> = Vec::new();
     for (id, rank) in &pool {
         if let Some(unit) = cached_unit(store, &mut unit_cache, *id)? {
@@ -220,8 +279,12 @@ pub fn query_with_vector(
     if !suppressed.is_empty() {
         pool_with_kinds.retain(|(id, _, _)| !suppressed.contains(id));
     }
-    let mut required_roles: Vec<&'static str> =
-        facets.iter().map(|facet| preferred_role(*facet)).collect();
+    // Facets were detected before candidate selection for the lifecycle
+    // filter; reuse them here for multi-role admission.
+    let mut required_roles: Vec<&'static str> = early_facets
+        .iter()
+        .flat_map(|facet| preferred_roles(*facet).iter().copied())
+        .collect();
     required_roles.dedup();
     // Supporting lanes and fill admit only credible candidates; required
     // lanes stay permissive, so recall rests on that path.
@@ -237,6 +300,7 @@ pub fn query_with_vector(
     let mut admitted_per_source: HashMap<i64, usize> = HashMap::new();
     let mut admitted_git_siblings: HashMap<i64, Vec<admit::SiblingKey>> = HashMap::new();
     let mut used_tokens: usize = 0;
+    let mut hindsight_admitted: usize = 0;
 
     for role in &required_roles {
         let candidates: Vec<i64> = pool_with_kinds
@@ -260,6 +324,7 @@ pub fn query_with_vector(
                 &mut seen_hashes,
                 &mut used_tokens,
                 &mut unit_cache,
+                &mut hindsight_admitted,
             )? {
                 break;
             }
@@ -271,6 +336,7 @@ pub fn query_with_vector(
         "design_rationale",
         "change_origin",
         "prior_work",
+        "curated_memory",
     ]
     .into_iter()
     .filter(|role| !required_roles.contains(role))
@@ -301,6 +367,7 @@ pub fn query_with_vector(
                 &mut seen_hashes,
                 &mut used_tokens,
                 &mut unit_cache,
+                &mut hindsight_admitted,
             )? {
                 break;
             }
@@ -340,6 +407,7 @@ pub fn query_with_vector(
             &mut seen_hashes,
             &mut used_tokens,
             &mut unit_cache,
+            &mut hindsight_admitted,
         )?;
     }
     accepted_ids.extend(admitted);
@@ -395,6 +463,9 @@ pub fn query_with_vector(
         }
         if let Some(expansion_reasons) = expansion_reasons {
             reasons.append(&mut expansion_reasons.clone());
+        }
+        if let Some(extra) = hindsight_reasons.get(unit_id) {
+            reasons.extend(extra.iter().cloned());
         }
         if let Some((role, required)) = role_assignments.get(unit_id) {
             reasons.push(SelectionReason::RoleAware(role.clone(), *required));

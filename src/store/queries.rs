@@ -82,17 +82,47 @@ impl Store {
         query: &str,
         limit: usize,
     ) -> rusqlite::Result<Vec<(i64, f64)>> {
+        self.fts_search_hindsight(column, query, limit, &["default", "history", "review"])
+    }
+
+    /// Lexical channel with Hindsight lifecycle filtering applied inside
+    /// the candidate query, before the limit. Filtering after a top-N
+    /// truncation would let ineligible retired memories occupy the window
+    /// and starve eligible active records of fusion. Non-memory sources
+    /// carry no visibility tier and always pass.
+    pub fn fts_search_hindsight(
+        &self,
+        column: &str,
+        query: &str,
+        limit: usize,
+        allowed: &[&str],
+    ) -> rusqlite::Result<Vec<(i64, f64)>> {
         let Some(expression) = match_expression(column, query) else {
             return Ok(Vec::new());
         };
+        let placeholders = vec!["?"; allowed.len()].join(",");
+        let visibility_path = crate::metadata::hindsight::VISIBILITY_PATH;
+        // All positional: match expression, one slot per allowed tier,
+        // then the limit.
         let sql = format!(
             "SELECT units_fts.rowid,bm25(units_fts) AS score FROM units_fts
              JOIN retrieval_units u ON u.id=units_fts.rowid
-             WHERE units_fts MATCH ?1
-             ORDER BY score,units_fts.rowid LIMIT ?2"
+             JOIN sources s ON s.id=u.source_id
+             WHERE units_fts MATCH ?
+             AND (s.kind != 'hindsight_memory'
+                  OR COALESCE(json_extract(u.metadata,'{visibility_path}'),'default')
+                     IN ({placeholders}))
+             ORDER BY score,units_fts.rowid LIMIT ?"
         );
         let mut statement = self.conn.prepare(&sql)?;
-        let rows = statement.query_map(params![expression, limit as i64], |row| {
+        let tier_params: Vec<String> = allowed.iter().map(|tier| (*tier).to_string()).collect();
+        let limit_value = limit as i64;
+        let mut ordered: Vec<&dyn rusqlite::ToSql> = vec![&expression];
+        for tier in &tier_params {
+            ordered.push(tier);
+        }
+        ordered.push(&limit_value);
+        let rows = statement.query_map(rusqlite::params_from_iter(ordered), |row| {
             Ok((row.get(0)?, row.get(1)?))
         })?;
         rows.collect()
@@ -105,30 +135,59 @@ impl Store {
         query: &[f32],
         limit: usize,
     ) -> rusqlite::Result<Vec<(i64, f32)>> {
+        self.top_k_cosine_hindsight(
+            kind,
+            model_version,
+            query,
+            limit,
+            &["default", "history", "review"],
+        )
+    }
+
+    /// Vector channel with the same pre-truncation lifecycle filtering as
+    /// [`Self::fts_search_hindsight`].
+    pub fn top_k_cosine_hindsight(
+        &self,
+        kind: &str,
+        model_version: &str,
+        query: &[f32],
+        limit: usize,
+        allowed: &[&str],
+    ) -> rusqlite::Result<Vec<(i64, f32)>> {
         if query.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
+        let placeholders = vec!["?"; allowed.len()].join(",");
+        let visibility_path = crate::metadata::hindsight::VISIBILITY_PATH;
+        // All positional: kind, model version, query vector, one slot per
+        // allowed tier, then dimensions and limit.
         let sql = format!(
-            "SELECT v.unit_id,vec_distance_cosine(v.vector,?3) AS distance FROM vectors v
+            "SELECT v.unit_id,vec_distance_cosine(v.vector,?) AS distance FROM vectors v
              JOIN retrieval_units u ON u.id=v.unit_id
-             WHERE v.kind=?1
-             AND v.model_version=?2 AND v.dimensions=?4
-             ORDER BY distance ASC,v.unit_id ASC LIMIT ?5"
+             JOIN sources s ON s.id=u.source_id
+             WHERE v.kind=?
+             AND v.model_version=? AND v.dimensions=?
+             AND (s.kind != 'hindsight_memory'
+                  OR COALESCE(json_extract(u.metadata,'{visibility_path}'),'default')
+                     IN ({placeholders}))
+             ORDER BY distance ASC,v.unit_id ASC LIMIT ?"
         );
         let mut statement = self.conn.prepare(&sql)?;
-        let rows = statement.query_map(
-            params![
-                kind,
-                model_version,
-                encode_f32(query),
-                query.len() as i64,
-                limit as i64
-            ],
-            |row| {
-                let distance: f32 = row.get(1)?;
-                Ok((row.get(0)?, 1.0 - distance))
-            },
-        )?;
+        let encoded = encode_f32(query);
+        let dimensions = query.len() as i64;
+        let limit_value = limit as i64;
+        let tier_params: Vec<String> = allowed.iter().map(|tier| (*tier).to_string()).collect();
+        // Textual `?` order: vector, kind, model, dimensions, tiers…, limit.
+        let mut positional: Vec<&dyn rusqlite::ToSql> = vec![&encoded, &kind, &model_version];
+        positional.push(&dimensions);
+        for tier in &tier_params {
+            positional.push(tier);
+        }
+        positional.push(&limit_value);
+        let rows = statement.query_map(rusqlite::params_from_iter(positional), |row| {
+            let distance: f32 = row.get(1)?;
+            Ok((row.get(0)?, 1.0 - distance))
+        })?;
         rows.collect()
     }
 

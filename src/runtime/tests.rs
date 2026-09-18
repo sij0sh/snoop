@@ -69,6 +69,45 @@ fn facet_detection_matches_exact_tokens_and_phrases() {
     );
 }
 
+#[test]
+fn review_state_facet_drives_hindsight_visibility() {
+    use crate::runtime::facets::{hindsight_visibility, preferred_roles};
+    use crate::runtime::options::HindsightVisibility;
+
+    assert!(detect_facets("show pending unverified imports").contains(&Facet::ReviewState));
+    assert!(detect_facets("what needs review here").contains(&Facet::ReviewState));
+    assert!(!detect_facets("how does the webhook retry").contains(&Facet::ReviewState));
+
+    assert_eq!(
+        hindsight_visibility(&[Facet::CurrentBehavior]),
+        HindsightVisibility::Default
+    );
+    assert_eq!(
+        hindsight_visibility(&[Facet::Evolution]),
+        HindsightVisibility::IncludeHistory
+    );
+    assert_eq!(
+        hindsight_visibility(&[Facet::Conflict]),
+        HindsightVisibility::IncludeReview
+    );
+    assert_eq!(
+        hindsight_visibility(&[Facet::ReviewState]),
+        HindsightVisibility::IncludeAll
+    );
+    assert_eq!(
+        hindsight_visibility(&[Facet::Evolution, Facet::Conflict]),
+        HindsightVisibility::IncludeAll
+    );
+
+    assert_eq!(preferred_roles(Facet::Invariant)[0], "curated_memory");
+    assert!(preferred_roles(Facet::CurrentBehavior).contains(&"curated_memory"));
+    assert!(preferred_roles(Facet::ReviewState).contains(&"curated_memory"));
+    assert_eq!(
+        crate::runtime::facets::role_of_kind(crate::core::SourceKind::HindsightMemory),
+        "curated_memory"
+    );
+}
+
 fn code_unit(evidence: &str, file: &str, anchor_symbol: Option<&str>) -> BuiltUnit {
     let mut anchors = vec![BuiltAnchor {
         kind: crate::core::AnchorKind::File,

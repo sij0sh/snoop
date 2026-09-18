@@ -279,6 +279,9 @@ pub fn build_units(atoms: &[ParsedAtom], source_kind: SourceKind, locator: &str)
     match source_kind {
         SourceKind::Code => code::build_code(atoms, locator),
         SourceKind::Markdown | SourceKind::Text => prose::build_prose(atoms, locator),
+        // The ledger router builds memory units directly from JSON; the
+        // atom path never runs for this source kind.
+        SourceKind::HindsightMemory => Vec::new(),
         SourceKind::GitCommit | SourceKind::AgentSession => Vec::new(),
     }
 }

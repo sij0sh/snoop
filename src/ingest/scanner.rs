@@ -79,11 +79,42 @@ fn classify(path: &Path) -> Option<SourceKind> {
 /// change mid-walk. Transient per-file IO failures are skipped with a stderr
 /// warning instead of aborting the whole index run (defect-audit
 /// 20260831023057-8ecdc8ca c3); only walk-setup errors (bad root) abort.
+/// Hindsight artifacts carry explicit Snoop policy instead of letting the
+/// generic repository scanner decide. The canonical ledger is force-scanned
+/// as a special source; everything derived from it is suppressed so one
+/// engineering claim never appears as a memory, several view copies, and
+/// an archived migration import at once.
+fn is_suppressed_hindsight_artifact(locator: &str) -> bool {
+    locator == crate::ingest::hindsight::HINDSIGHT_LEDGER
+        || locator.starts_with(".agents/curation/migration/")
+        || locator.starts_with(".agents/curation/sessions/")
+        || (locator.starts_with(".agents/curation/") && locator.contains("/runs/"))
+}
+
+/// Generated views are suppressed whenever the canonical ledger exists.
+/// Without a ledger, only files identifying themselves as generated
+/// projections (via the view marker) are suppressed; other Markdown under
+/// `.agents/engineering/` keeps normal ingestion.
+fn is_suppressed_engineering_view(root: &Path, locator: &str, ledger_present: bool) -> bool {
+    if !locator.starts_with(".agents/engineering/") {
+        return false;
+    }
+    if ledger_present {
+        return true;
+    }
+    let path = root.join(locator);
+    let Ok(content) = std::fs::read(&path) else {
+        return false;
+    };
+    String::from_utf8_lossy(&content).contains(crate::ingest::hindsight::GENERATED_VIEW_MARKER)
+}
+
 pub fn scan(
     root: &Path,
 ) -> Result<(Vec<ScannedSource>, usize), Box<dyn std::error::Error + Send + Sync>> {
     let mut sources = Vec::new();
     let mut skipped = 0_usize;
+    let ledger_present = crate::ingest::hindsight::detect(root).is_some();
     let mut builder = ignore::WalkBuilder::new(root);
     builder
         .hidden(true)
@@ -130,6 +161,11 @@ pub fn scan(
         {
             continue;
         }
+        if is_suppressed_hindsight_artifact(&locator)
+            || is_suppressed_engineering_view(root, &locator, ledger_present)
+        {
+            continue;
+        }
         let Some(kind) = classify(entry.path()) else {
             continue;
         };
@@ -171,10 +207,55 @@ pub fn scan(
             modified_at,
         });
     }
-    scan_markdown_ignoring_git(root, &mut sources, &mut skipped);
+    scan_markdown_ignoring_git(root, &mut sources, &mut skipped, ledger_present);
     force_scan_cheatcodes(root, &mut sources, &mut skipped);
+    force_scan_hindsight_ledger(root, &mut sources, &mut skipped);
     sources.sort_by(|a, b| a.locator.cmp(&b.locator));
     Ok((sources, skipped))
+}
+
+/// The Hindsight canonical ledger is JSON, which the generic classifier
+/// never selects. Force-scan it as a special source so the ingest router
+/// can build one retrieval unit per memory record from it.
+fn force_scan_hindsight_ledger(root: &Path, sources: &mut Vec<ScannedSource>, skipped: &mut usize) {
+    let locator = crate::ingest::hindsight::HINDSIGHT_LEDGER;
+    if sources.iter().any(|source| source.locator == locator) {
+        return;
+    }
+    let path = root.join(locator);
+    if !path.is_file() {
+        return;
+    }
+    let Ok(metadata) = path.metadata() else {
+        *skipped += 1;
+        return;
+    };
+    if metadata.len() > MAX_SOURCE_BYTES {
+        return;
+    }
+    let content_hash = match hash_file(&path) {
+        Ok(content_hash) => content_hash,
+        Err(error) => {
+            *skipped += 1;
+            eprintln!(
+                "warning: skipped unreadable file {}: {error}",
+                path.display()
+            );
+            return;
+        }
+    };
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64);
+    sources.push(ScannedSource {
+        path,
+        locator: locator.to_string(),
+        kind: SourceKind::HindsightMemory,
+        content_hash,
+        modified_at,
+    });
 }
 
 /// The cheatcodes knowledge corpus is machine-local agent state that is
@@ -230,7 +311,12 @@ fn force_scan_cheatcodes(root: &Path, sources: &mut Vec<ScannedSource>, skipped:
     });
 }
 
-fn scan_markdown_ignoring_git(root: &Path, sources: &mut Vec<ScannedSource>, skipped: &mut usize) {
+fn scan_markdown_ignoring_git(
+    root: &Path,
+    sources: &mut Vec<ScannedSource>,
+    skipped: &mut usize,
+    ledger_present: bool,
+) {
     let mut known: HashSet<String> = sources
         .iter()
         .map(|source| source.locator.clone())
@@ -270,6 +356,14 @@ fn scan_markdown_ignoring_git(root: &Path, sources: &mut Vec<ScannedSource>, ski
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace('\\', "/");
+        // The second Markdown walk ignores git rules, which is exactly how
+        // generated Hindsight material would leak back in: suppress it here
+        // too, before the generic Markdown pass finishes.
+        if is_suppressed_hindsight_artifact(&locator)
+            || is_suppressed_engineering_view(root, &locator, ledger_present)
+        {
+            continue;
+        }
         if !known.insert(locator.clone()) {
             continue;
         }
@@ -316,6 +410,100 @@ fn scan_markdown_ignoring_git(root: &Path, sources: &mut Vec<ScannedSource>, ski
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hindsight_repo() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        // A gitignored .agents tree: the ledger must still be found, and
+        // the second Markdown walk (which ignores git rules) must still
+        // suppress derived artifacts.
+        std::fs::write(root.join(".gitignore"), ".agents/\n").unwrap();
+        std::fs::create_dir_all(root.join(".agents/curation/migration")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/curation/sessions")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/curation/architecture/runs")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/engineering")).unwrap();
+        std::fs::write(
+            root.join(".agents/curation/memory.json"),
+            r#"{"version": 1, "records": []}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/engineering/ARCHITECTURE.md"),
+            "# ARCHITECTURE\n<!-- hindsight:view:v1 -->\nview copy\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/curation/migration/abc.md"),
+            "archived import\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/curation/sessions/session.md"),
+            "session copy\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/curation/architecture/runs/report.md"),
+            "run report\n",
+        )
+        .unwrap();
+        std::fs::write(root.join(".agents/CHEATCODES.md"), "# Notes\n").unwrap();
+        directory
+    }
+
+    #[test]
+    fn ledger_is_force_scanned_and_derived_artifacts_are_suppressed() {
+        let directory = hindsight_repo();
+        let (sources, _) = scan(directory.path()).unwrap();
+        let locators: Vec<&str> = sources
+            .iter()
+            .map(|source| source.locator.as_str())
+            .collect();
+        let ledger = sources
+            .iter()
+            .find(|source| source.locator == crate::ingest::hindsight::HINDSIGHT_LEDGER)
+            .expect("canonical ledger is scanned despite gitignore and JSON extension");
+        assert_eq!(ledger.kind, SourceKind::HindsightMemory);
+        for suppressed in [
+            ".agents/engineering/ARCHITECTURE.md",
+            ".agents/curation/migration/abc.md",
+            ".agents/curation/sessions/session.md",
+            ".agents/curation/architecture/runs/report.md",
+        ] {
+            assert!(
+                !locators.contains(&suppressed),
+                "{suppressed} must not reach generic ingestion: {locators:?}"
+            );
+        }
+        assert!(
+            locators.contains(&".agents/CHEATCODES.md"),
+            "legitimate .agents content keeps normal ingestion: {locators:?}"
+        );
+    }
+
+    #[test]
+    fn projection_only_repos_suppress_marked_views_but_keep_authored_docs() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join(".agents/engineering")).unwrap();
+        std::fs::write(
+            root.join(".agents/engineering/ARCHITECTURE.md"),
+            "# ARCHITECTURE\n<!-- hindsight:view:v1 -->\ngenerated\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/engineering/NOTES.md"),
+            "# Hand-written notes\n",
+        )
+        .unwrap();
+        let (sources, _) = scan(root).unwrap();
+        let locators: Vec<&str> = sources
+            .iter()
+            .map(|source| source.locator.as_str())
+            .collect();
+        assert!(!locators.contains(&".agents/engineering/ARCHITECTURE.md"));
+        assert!(locators.contains(&".agents/engineering/NOTES.md"));
+    }
 
     #[test]
     fn scans_the_gitignored_cheatcodes_knowledge_file() {

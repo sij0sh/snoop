@@ -9,6 +9,7 @@ pub(crate) enum Facet {
     Conflict,
     Invariant,
     CurrentBehavior,
+    ReviewState,
 }
 
 fn query_tokens(query: &str) -> Vec<String> {
@@ -102,6 +103,16 @@ pub(crate) fn detect_facets(query: &str) -> Vec<Facet> {
     if has_token(&["current", "currently", "how", "now"]) {
         facets.push(Facet::CurrentBehavior);
     }
+    if has_token(&[
+        "unverified",
+        "uncertain",
+        "pending",
+        "imported",
+        "unconfirmed",
+    ]) || has_phrase(&["needs review", "not confirmed", "not yet confirmed"])
+    {
+        facets.push(Facet::ReviewState);
+    }
     if facets.is_empty() {
         facets.push(Facet::CurrentBehavior);
     }
@@ -114,17 +125,45 @@ pub(crate) fn role_of_kind(kind: crate::core::SourceKind) -> &'static str {
         crate::core::SourceKind::Markdown | crate::core::SourceKind::Text => "design_rationale",
         crate::core::SourceKind::GitCommit => "change_origin",
         crate::core::SourceKind::AgentSession => "prior_work",
+        // Curated engineering memory is neither current implementation nor
+        // raw history: it is interpreted, lifecycle-managed claims about
+        // the evidence, so it gets its own role.
+        crate::core::SourceKind::HindsightMemory => "curated_memory",
     }
 }
 
-pub(crate) fn preferred_role(facet: Facet) -> &'static str {
+/// Hindsight lifecycle visibility for one query. Ordinary queries see only
+/// default material; Evolution unlocks history, Conflict unlocks disputed
+/// and review material, and explicit review-state queries unlock
+/// everything retrievable deliberately.
+pub(crate) fn hindsight_visibility(facets: &[Facet]) -> super::options::HindsightVisibility {
+    use super::options::HindsightVisibility;
+    let evolution = facets.contains(&Facet::Evolution);
+    let conflict = facets.contains(&Facet::Conflict);
+    let review = facets.contains(&Facet::ReviewState);
+    if review || (evolution && conflict) {
+        HindsightVisibility::IncludeAll
+    } else if evolution {
+        HindsightVisibility::IncludeHistory
+    } else if conflict {
+        HindsightVisibility::IncludeReview
+    } else {
+        HindsightVisibility::Default
+    }
+}
+
+/// Ordered admission lanes per facet. Most questions legitimately need two
+/// evidence roles (for example current code plus the curated constraint
+/// behind it), so facets name a primary and a secondary role.
+pub(crate) fn preferred_roles(facet: Facet) -> &'static [&'static str] {
     match facet {
-        Facet::CurrentBehavior => "current_truth",
-        Facet::Rationale => "design_rationale",
-        Facet::Evolution => "change_origin",
-        Facet::PriorWork => "prior_work",
-        Facet::Validation => "prior_work",
-        Facet::Conflict => "prior_work",
-        Facet::Invariant => "current_truth",
+        Facet::CurrentBehavior => &["current_truth", "curated_memory"],
+        Facet::Rationale => &["curated_memory", "design_rationale"],
+        Facet::Evolution => &["change_origin", "curated_memory"],
+        Facet::PriorWork => &["prior_work", "curated_memory"],
+        Facet::Validation => &["prior_work", "current_truth"],
+        Facet::Conflict => &["curated_memory", "prior_work"],
+        Facet::Invariant => &["curated_memory", "current_truth"],
+        Facet::ReviewState => &["curated_memory"],
     }
 }

@@ -221,6 +221,137 @@ pub(crate) mod source_slices {
     }
 }
 
+pub(crate) mod hindsight {
+    use super::Value;
+
+    /// Integration policy version: part of every Hindsight unit content
+    /// hash, so a rendering/interpretation change rebuilds ledger units
+    /// instead of mixing old and new projections.
+    pub const POLICY_VERSION: &str = "hindsight-memory-v1";
+
+    /// JSON path of the lifecycle visibility tier inside unit metadata,
+    /// for visibility filtering at channel candidate selection.
+    pub const VISIBILITY_PATH: &str = "$.hindsight.visibility";
+
+    /// Lifecycle visibility tiers. Historical and review material stays
+    /// indexed but is ineligible for ordinary queries; facets unlock it.
+    pub const DEFAULT: &str = "default";
+    pub const HISTORY: &str = "history";
+    pub const REVIEW: &str = "review";
+
+    /// Maps a Hindsight record status (plus scar/conflict shape, already
+    /// folded into `status` by the ingest adapter) onto a visibility
+    /// tier. Unknown statuses fail safe into review: hidden by default,
+    /// retrievable deliberately.
+    pub fn visibility_for_status(status: &str) -> &'static str {
+        match status {
+            "active" => DEFAULT,
+            "superseded" | "obsolete" | "resolved" => HISTORY,
+            "unverified" | "conflicted" => REVIEW,
+            _ => REVIEW,
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct HindsightMeta {
+        pub schema_version: i64,
+        pub record_id: String,
+        pub revision: i64,
+        pub kind: String,
+        pub status: String,
+        pub confidence: String,
+        pub basis: String,
+        pub domains: Vec<String>,
+        pub scope_paths: Vec<String>,
+        pub scope_symbols: Vec<String>,
+        pub scope_concepts: Vec<String>,
+        pub scope_global: bool,
+        pub supersedes: Vec<String>,
+        pub contradicts: Vec<String>,
+        pub created_at: Option<String>,
+        pub last_validated_at: Option<String>,
+        pub scar_state: Option<String>,
+        pub scar_constraint: Option<String>,
+        pub scar_removal_condition: Option<String>,
+        pub conflict_targets: Vec<String>,
+        pub conflict_reason: Option<String>,
+        pub provenance_refs: Vec<String>,
+    }
+
+    pub fn set(metadata: &mut Value, meta: &HindsightMeta) {
+        metadata["hindsight"] = serde_json::json!({
+            "schema_version": meta.schema_version,
+            "record_id": meta.record_id,
+            "revision": meta.revision,
+            "kind": meta.kind,
+            "status": meta.status,
+            "confidence": meta.confidence,
+            "basis": meta.basis,
+            "domains": meta.domains,
+            "scope": {
+                "global": meta.scope_global,
+                "paths": meta.scope_paths,
+                "symbols": meta.scope_symbols,
+                "concepts": meta.scope_concepts,
+            },
+            "supersedes": meta.supersedes,
+            "contradicts": meta.contradicts,
+            "created_at": meta.created_at,
+            "last_validated_at": meta.last_validated_at,
+            "scar_state": meta.scar_state,
+            "scar_constraint": meta.scar_constraint,
+            "scar_removal_condition": meta.scar_removal_condition,
+            "conflict_targets": meta.conflict_targets,
+            "conflict_reason": meta.conflict_reason,
+            "provenance_refs": meta.provenance_refs,
+            "visibility": visibility_for_status(&meta.status),
+        });
+    }
+
+    fn text(metadata: &Value, key: &str) -> Option<String> {
+        metadata["hindsight"][key].as_str().map(String::from)
+    }
+
+    /// Visibility tier of a unit: "default" when the unit carries no
+    /// Hindsight metadata, so non-memory sources always pass lifecycle
+    /// filtering unchanged.
+    pub fn visibility(metadata: &Value) -> &str {
+        metadata["hindsight"]["visibility"]
+            .as_str()
+            .unwrap_or(DEFAULT)
+    }
+
+    pub fn status(metadata: &Value) -> Option<String> {
+        text(metadata, "status")
+    }
+
+    pub fn confidence(metadata: &Value) -> Option<String> {
+        text(metadata, "confidence")
+    }
+
+    pub fn kind(metadata: &Value) -> Option<String> {
+        text(metadata, "kind")
+    }
+
+    pub fn scar_state(metadata: &Value) -> Option<String> {
+        metadata["hindsight"]["scar_state"]
+            .as_str()
+            .map(String::from)
+    }
+
+    pub fn scope_paths(metadata: &Value) -> Vec<String> {
+        metadata["hindsight"]["scope"]["paths"]
+            .as_array()
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 pub mod timestamp {
     use super::Value;
 
@@ -400,6 +531,60 @@ mod tests {
         assert_eq!(
             source_slices::read(&serde_json::json!({})),
             Vec::<serde_json::Value>::new()
+        );
+    }
+
+    #[test]
+    fn hindsight_sets_lifecycle_visibility_and_round_trips() {
+        use super::hindsight::{visibility, visibility_for_status, HindsightMeta};
+        assert_eq!(visibility_for_status("active"), "default");
+        assert_eq!(visibility_for_status("superseded"), "history");
+        assert_eq!(visibility_for_status("obsolete"), "history");
+        assert_eq!(visibility_for_status("resolved"), "history");
+        assert_eq!(visibility_for_status("unverified"), "review");
+        assert_eq!(visibility_for_status("conflicted"), "review");
+        assert_eq!(visibility_for_status("unknown-future"), "review");
+
+        let meta = HindsightMeta {
+            schema_version: 1,
+            record_id: "mem_x".into(),
+            revision: 2,
+            kind: "constraint".into(),
+            status: "superseded".into(),
+            confidence: "authoritative".into(),
+            basis: "policy".into(),
+            domains: vec!["architecture".into()],
+            scope_paths: vec!["src/billing/**".into()],
+            scope_symbols: vec![],
+            scope_concepts: vec![],
+            scope_global: false,
+            supersedes: vec![],
+            contradicts: vec![],
+            created_at: None,
+            last_validated_at: None,
+            scar_state: None,
+            scar_constraint: None,
+            scar_removal_condition: None,
+            conflict_targets: vec![],
+            conflict_reason: None,
+            provenance_refs: vec![],
+        };
+        let mut metadata = serde_json::json!({});
+        // Units without Hindsight metadata always pass lifecycle filtering.
+        assert_eq!(visibility(&metadata), "default");
+        super::hindsight::set(&mut metadata, &meta);
+        assert_eq!(visibility(&metadata), "history");
+        assert_eq!(
+            super::hindsight::status(&metadata).as_deref(),
+            Some("superseded")
+        );
+        assert_eq!(
+            super::hindsight::confidence(&metadata).as_deref(),
+            Some("authoritative")
+        );
+        assert_eq!(
+            super::hindsight::scope_paths(&metadata),
+            vec!["src/billing/**".to_string()]
         );
     }
 

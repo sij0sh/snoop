@@ -71,7 +71,7 @@ fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
         {
             "name": "context",
-            "description": "Get relevant repository context across code, docs, git history, and prior agent work.",
+            "description": "Get relevant repository context across code, docs, git history, prior agent work, and curated Hindsight engineering memory.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
